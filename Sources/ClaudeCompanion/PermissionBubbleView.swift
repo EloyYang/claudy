@@ -51,7 +51,7 @@ struct PermissionBubbleView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .frame(maxWidth: 250, alignment: .leading)
+            .frame(maxWidth: 210, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 14)
                     .fill(Color.white)
