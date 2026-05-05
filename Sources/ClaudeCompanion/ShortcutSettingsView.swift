@@ -109,36 +109,91 @@ struct KeyRecorderField: View {
 
 struct ShortcutSettingsView: View {
     @ObservedObject private var store = ShortcutStore.shared
+    @State private var customLimitText: String = ""
+
+    private let presets: [(label: String, valueK: Int)] = [
+        ("500K",  500),
+        ("1M",   1000),
+        ("2M",   2000),
+        ("5M",   5000),
+    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("단축키 설정")
+            Text("설정")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.white)
 
-            Divider()
-                .background(Color.white.opacity(0.2))
+            Divider().background(Color.white.opacity(0.2))
 
-            VStack(alignment: .leading, spacing: 12) {
-                KeyRecorderField(label: "권한 허락",  shortcut: $store.approve)
-                KeyRecorderField(label: "권한 거부",  shortcut: $store.deny)
-                KeyRecorderField(label: "숨기기/보이기", shortcut: $store.hide)
+            // ── 플랜 일일 한도
+            VStack(alignment: .leading, spacing: 8) {
+                Text("플랜 일일 토큰 한도")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.85))
+
+                HStack(spacing: 6) {
+                    ForEach(presets, id: \.valueK) { preset in
+                        Button(preset.label) {
+                            store.planDailyLimitK = preset.valueK
+                            customLimitText = ""
+                        }
+                        .buttonStyle(PillButtonStyle(
+                            color: store.planDailyLimitK == preset.valueK
+                                ? .accentColor : .init(white: 0.3)
+                        ))
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    Text("직접 입력 (K):")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.5))
+                    TextField("\(store.planDailyLimitK)", text: $customLimitText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.white)
+                        .frame(width: 60)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.white.opacity(0.08)))
+                        .onSubmit {
+                            if let v = Int(customLimitText), v > 0 {
+                                store.planDailyLimitK = v
+                            }
+                            customLimitText = ""
+                        }
+                    Text("= \(store.planDailyLimitK >= 1000 ? "\(store.planDailyLimitK/1000)M" : "\(store.planDailyLimitK)K") / 일")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.4))
+                }
             }
 
-            Divider()
-                .background(Color.white.opacity(0.2))
+            Divider().background(Color.white.opacity(0.2))
+
+            // ── 단축키
+            VStack(alignment: .leading, spacing: 8) {
+                Text("단축키")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.85))
+
+                VStack(alignment: .leading, spacing: 12) {
+                    KeyRecorderField(label: "권한 허락",    shortcut: $store.approve)
+                    KeyRecorderField(label: "권한 거부",    shortcut: $store.deny)
+                    KeyRecorderField(label: "숨기기/보이기", shortcut: $store.hide)
+                }
+            }
+
+            Divider().background(Color.white.opacity(0.2))
 
             HStack {
                 Text("단축키는 전역으로 동작합니다.")
                     .font(.system(size: 10))
                     .foregroundColor(.white.opacity(0.4))
                 Spacer()
-                Button("저장") {
-                    store.save()
-                    // 창 닫기
-                    NSApp.keyWindow?.close()
-                }
-                .buttonStyle(PillButtonStyle(color: .accentColor))
+                Button("닫기") { NSApp.keyWindow?.close() }
+                    .buttonStyle(PillButtonStyle(color: .accentColor))
             }
         }
         .padding(20)

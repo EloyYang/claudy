@@ -34,12 +34,13 @@ struct CompanionView: View {
                 }
                 .padding(.top, 6)
 
-                // 캐릭터 + 사용량 바
+                // 캐릭터 + 플랜 사용량 바
                 VStack(spacing: 1) {
                     characterView
                         .frame(width: 60, height: 70)
 
-                    UsageBarView(percent: ctrl.usagePercent)
+                    UsageBarView(percent: ctrl.planUsagePercent,
+                                 label: ctrl.planTokenLabel)
                         .frame(width: 66)
                         .opacity(ctrl.state == .idle ? 0 : 1)
                         .animation(.easeInOut(duration: 0.3), value: ctrl.state == .idle)

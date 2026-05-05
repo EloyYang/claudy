@@ -59,10 +59,16 @@ class ShortcutStore: ObservableObject {
     @Published var deny:    KeyShortcut?
     @Published var hide:    KeyShortcut?
 
+    /// 일일 플랜 토큰 한도 (단위: K, 기본 1000 = 1M)
+    @Published var planDailyLimitK: Int = 1000 {
+        didSet { UserDefaults.standard.set(planDailyLimitK, forKey: UDKey.planLimit) }
+    }
+
     private enum UDKey {
-        static let approve = "shortcut.approve"
-        static let deny    = "shortcut.deny"
-        static let hide    = "shortcut.hide"
+        static let approve   = "shortcut.approve"
+        static let deny      = "shortcut.deny"
+        static let hide      = "shortcut.hide"
+        static let planLimit = "plan.dailyLimitK"
     }
 
     init() {
@@ -72,6 +78,8 @@ class ShortcutStore: ObservableObject {
             approve = KeyShortcut(keyCode: 36,
                                   modifiers: NSEvent.ModifierFlags.command.rawValue)
         }
+        let saved = UserDefaults.standard.integer(forKey: UDKey.planLimit)
+        planDailyLimitK = saved > 0 ? saved : 1000
     }
 
     func save() {

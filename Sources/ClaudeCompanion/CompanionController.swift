@@ -13,11 +13,20 @@ enum CompanionState: Equatable {
 
 class CompanionController: ObservableObject {
     @Published var state: CompanionState = .idle
-    @Published var usagePercent: Double = 0
+    @Published var usagePercent: Double = 0      // 컨텍스트 창 사용률 (내부용)
+    @Published var planUsagePercent: Double = 0  // 플랜 일일 한도 대비 사용률
+    @Published var planTokensToday: Int = 0       // 오늘 사용한 토큰 수
     @Published var sessionStart: Date? = nil
-    @Published var isSliding: Bool = false   // 등장/퇴장 슬라이드 중
+    @Published var isSliding: Bool = false
     @Published var alwaysApprove: Bool = false
     var pendingPermissionId: String? = nil
+
+    var planTokenLabel: String {
+        let t = planTokensToday
+        if t >= 1_000_000 { return String(format: "%.1fM", Double(t) / 1_000_000) }
+        if t >= 1_000     { return "\(t / 1_000)K" }
+        return t > 0 ? "\(t)" : ""
+    }
 
     // AppDelegate가 주입하는 액션 콜백
     var onHideRequest: (() -> Void)?

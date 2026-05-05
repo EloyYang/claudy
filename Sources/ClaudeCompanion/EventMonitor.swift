@@ -16,6 +16,7 @@ class EventMonitor {
 
     private let queue     = DispatchQueue(label: "claude.companion.events", qos: .background)
     private var timer:      DispatchSourceTimer?
+    private var planTimer:  DispatchSourceTimer?
     private var fileOffset      = 0
     private var claudeWasRunning = false
     private var isInitialCheck   = true   // 앱 시작 시 이미 실행 중인 경우 구분
@@ -50,11 +51,33 @@ class EventMonitor {
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now(), repeating: .milliseconds(500))
         t.setEventHandler { [weak self] in
-            self?.checkProcess()   // claude 프로세스 감시
-            self?.pollFile()       // 상세 이벤트 파일 폴링
+            self?.checkProcess()
+            self?.pollFile()
         }
         t.resume()
         timer = t
+
+        // 플랜 사용량: 60초 간격으로 JSONL 파일 집계
+        let pt = DispatchSource.makeTimerSource(queue: queue)
+        pt.schedule(deadline: .now(), repeating: .seconds(60))
+        pt.setEventHandler { [weak self] in self?.updatePlanUsage() }
+        pt.resume()
+        planTimer = pt
+    }
+
+    // MARK: - 플랜 일일 사용량
+
+    private func updatePlanUsage() {
+        let tokens  = TokenUsageReader.readToday()
+        let limitK  = ShortcutStore.shared.planDailyLimitK
+        let limit   = limitK * 1_000
+        let percent = limit > 0
+            ? min(100, Double(tokens.total) / Double(limit) * 100)
+            : 0
+        DispatchQueue.main.async {
+            self.controller.planTokensToday  = tokens.total
+            self.controller.planUsagePercent = percent
+        }
     }
 
     // MARK: - 프로세스 감시

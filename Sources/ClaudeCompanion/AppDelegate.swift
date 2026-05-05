@@ -186,7 +186,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hostingView.autoresizingMask = [.width, .height]
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 310, height: 200),
+            contentRect: NSRect(x: 0, y: 0, width: 310, height: 340),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false

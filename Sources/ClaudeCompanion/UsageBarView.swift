@@ -2,6 +2,7 @@ import SwiftUI
 
 struct UsageBarView: View {
     let percent: Double      // 0–100
+    var label: String = ""   // 예) "481K" — 바 아래 표시, 빈 문자열이면 숨김
 
     private let totalSegments = 10
     private let segmentH: CGFloat = 9
@@ -53,6 +54,15 @@ struct UsageBarView: View {
         }
         .frame(height: segmentH + borderW * 2)
         .padding(.horizontal, 6)
+
+        // 토큰 수 라벨
+        if !label.isEmpty {
+            Text(label)
+                .font(.system(size: 7, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.45))
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 1)
+        }
     }
 }
 
