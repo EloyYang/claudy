@@ -79,7 +79,8 @@ class EventMonitor {
                 }
                 self.controller.sessionStart = Date()
                 self.controller.onShowRequest?()
-                self.controller.update(to: .ready)
+                // 시작 직후에는 응답 생성 중일 수 있으므로 thinking으로 시작
+                self.controller.update(to: .thinking)
             }
         } else {
             // 2초 디바운스: 세션 전환 등으로 프로세스가 잠깐 사라졌다 복귀하면 숨기지 않음
@@ -149,7 +150,17 @@ class EventMonitor {
 
         switch event.type {
         case "tool_use":
-            controller.update(to: .toolUse(formatToolName(event.tool ?? "tool")))
+            let toolName = formatToolName(event.tool ?? "tool")
+            if case .ready = controller.state {
+                // 새 사용자 턴 시작: 잠깐 thinking 표시 후 tool 이름으로 전환
+                controller.update(to: .thinking)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                    guard let self, case .thinking = self.controller.state else { return }
+                    self.controller.update(to: .toolUse(toolName))
+                }
+            } else {
+                controller.update(to: .toolUse(toolName))
+            }
         case "tool_done":
             controller.update(to: .thinking)
         case "done":
