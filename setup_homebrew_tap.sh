@@ -2,8 +2,8 @@
 # Homebrew tap 저장소 초기 설정 (최초 1회만 실행)
 set -e
 
-TAP_REPO="EloyYang/homebrew-claudy"
-TAP_DIR="$HOME/homebrew-claudy"
+TAP_REPO="EloyYang/homebrew-buni"
+TAP_DIR="$HOME/homebrew-buni"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Homebrew tap 설정"
@@ -14,7 +14,7 @@ echo ""
 echo "▶ GitHub 저장소 생성 중..."
 gh repo create "$TAP_REPO" \
     --public \
-    --description "Homebrew tap for Claudy — Claude Code companion app" \
+    --description "Homebrew tap for Buni — Claude Code companion app" \
     --clone "$TAP_DIR" 2>/dev/null || {
     echo "  (이미 존재하거나 클론 중...)"
     [ -d "$TAP_DIR" ] || git clone "https://github.com/$TAP_REPO" "$TAP_DIR"
@@ -25,18 +25,18 @@ mkdir -p "$TAP_DIR/Casks"
 
 # README
 cat > "$TAP_DIR/README.md" << 'MD'
-# homebrew-claudy
+# homebrew-buni
 
-Homebrew tap for [Claudy](https://github.com/EloyYang/claudy) — Claude Code 메뉴바 컴패니언 앱
+Homebrew tap for [Buni](https://github.com/EloyYang/buni) — Claude Code 메뉴바 컴패니언 앱
 
 ## 설치
 
 ```bash
-brew tap EloyYang/claudy
-brew install --cask claudy
+brew tap EloyYang/buni
+brew install --cask buni
 ```
 
-> **참고**: Claudy는 Apple 공증 없이 배포됩니다.
+> **참고**: Buni는 Apple 공증 없이 배포됩니다.
 > 처음 실행 시 Gatekeeper 경고가 뜨면:
 > 시스템 설정 → 개인정보 보호 및 보안 → "확인 없이 열기"
 MD
@@ -51,6 +51,6 @@ echo ""
 echo "이제 release.sh 를 실행하면 tap이 자동으로 업데이트됩니다."
 echo ""
 echo "사용자 설치 명령:"
-echo "  brew tap EloyYang/claudy"
-echo "  brew install --cask claudy"
+echo "  brew tap EloyYang/buni"
+echo "  brew install --cask buni"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

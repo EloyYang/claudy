@@ -102,12 +102,10 @@ struct CompanionView: View {
     @ViewBuilder
     private var characterView: some View {
         switch characterStore.selected {
-        case .crab:
-            ClaudeCharacterView()
-        case .jellyfish:
-            JellyfishCharacterView()
         case .rabbit:
             RabbitCharacterView()
+        case .jellyfish:
+            JellyfishCharacterView()
         }
     }
 

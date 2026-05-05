@@ -81,7 +81,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         // 현재 버전 표시 (비활성)
-        let verItem = NSMenuItem(title: "Claudy v\(UpdateChecker.currentVersion)",
+        let verItem = NSMenuItem(title: "Buni v\(UpdateChecker.currentVersion)",
                                  action: nil, keyEquivalent: "")
         verItem.isEnabled = false
         menu.addItem(verItem)

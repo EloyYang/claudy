@@ -2,8 +2,8 @@ import Foundation
 import AppKit
 
 final class UpdateChecker {
-    private static let apiURL = "https://api.github.com/repos/EloyYang/claudy/releases/latest"
-    private static let releasePage = "https://github.com/EloyYang/claudy/releases/latest"
+    private static let apiURL = "https://api.github.com/repos/EloyYang/buni/releases/latest"
+    private static let releasePage = "https://github.com/EloyYang/buni/releases/latest"
 
     /// 앱 번들에서 현재 버전 읽기
     static var currentVersion: String {

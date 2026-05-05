@@ -1,17 +1,17 @@
 #!/bin/bash
-# Claudy.app 번들 빌드 스크립트
+# Buni.app 번들 빌드 스크립트
 # 사용: ./build_app.sh [--install]   --install 플래그 시 /Applications에 복사
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_NAME="Claudy"
+APP_NAME="Buni"
 APP_BUNDLE="$SCRIPT_DIR/$APP_NAME.app"
 
 # VERSION 파일에서 버전 읽기
 VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.0.0")"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Claudy.app 빌드"
+echo "  Buni.app 빌드"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ── 1. Swift Release 빌드
@@ -40,10 +40,10 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST'
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleExecutable</key>      <string>Claudy</string>
-    <key>CFBundleIdentifier</key>      <string>com.claudy.companion</string>
-    <key>CFBundleName</key>            <string>Claudy</string>
-    <key>CFBundleDisplayName</key>     <string>Claudy</string>
+    <key>CFBundleExecutable</key>      <string>Buni</string>
+    <key>CFBundleIdentifier</key>      <string>com.buni.companion</string>
+    <key>CFBundleName</key>            <string>Buni</string>
+    <key>CFBundleDisplayName</key>     <string>Buni</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
     <key>CFBundleVersion</key>         <string>VERSION_PLACEHOLDER</string>
     <key>CFBundleShortVersionString</key> <string>VERSION_PLACEHOLDER</string>
@@ -103,16 +103,16 @@ if [[ "$1" == "--install" ]]; then
     echo ""
     echo "▶ /Applications에 설치 중..."
     # 실행 중이면 종료
-    osascript -e 'quit app "Claudy"' 2>/dev/null || true
-    pkill -x "Claudy" 2>/dev/null || true
+    osascript -e 'quit app "Buni"' 2>/dev/null || true
+    pkill -x "Buni" 2>/dev/null || true
     sleep 0.5
 
     rm -rf "/Applications/$APP_NAME.app"
     cp -r "$APP_BUNDLE" "/Applications/$APP_NAME.app"
-    echo "✓ /Applications/Claudy.app 설치 완료"
+    echo "✓ /Applications/Buni.app 설치 완료"
 
     echo ""
-    echo "▶ Claudy 시작 중..."
+    echo "▶ Buni 시작 중..."
     open "/Applications/$APP_NAME.app"
     echo "✓ 실행됨"
 fi
@@ -121,7 +121,7 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [[ "$1" == "--install" ]]; then
     echo "  ✅ 설치 완료!"
-    echo "  Launchpad 또는 Spotlight에서 'Claudy'로 검색하세요."
+    echo "  Launchpad 또는 Spotlight에서 'Buni'로 검색하세요."
 else
     echo "  빌드만 완료됨. 설치하려면:"
     echo "  ./build_app.sh --install"

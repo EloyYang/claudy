@@ -1,16 +1,16 @@
 #!/bin/bash
-# Claudy 릴리즈 스크립트
+# Buni 릴리즈 스크립트
 # 사용: ./release.sh <버전>   예) ./release.sh 1.0.1
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION="${1:?사용법: ./release.sh <버전>  예) ./release.sh 1.0.1}"
-APP_BUNDLE="$SCRIPT_DIR/Claudy.app"
-ZIP_NAME="Claudy-${VERSION}.zip"
+APP_BUNDLE="$SCRIPT_DIR/Buni.app"
+ZIP_NAME="Buni-${VERSION}.zip"
 ZIP_PATH="$SCRIPT_DIR/$ZIP_NAME"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Claudy v$VERSION 릴리즈"
+echo "  Buni v$VERSION 릴리즈"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ── 1. VERSION 파일 업데이트 & 빌드
@@ -27,7 +27,7 @@ echo ""
 echo "▶ ZIP 패키징 중..."
 rm -f "$ZIP_PATH"
 cd "$SCRIPT_DIR"
-zip -r "$ZIP_NAME" "Claudy.app" > /dev/null
+zip -r "$ZIP_NAME" "Buni.app" > /dev/null
 echo "✓ $ZIP_NAME 생성됨"
 
 # ── 3. SHA256
@@ -48,15 +48,15 @@ echo "✓ v$VERSION 태그 푸시됨"
 echo ""
 echo "▶ GitHub Release 생성 중..."
 gh release create "v$VERSION" \
-    "$ZIP_PATH#Claudy.zip" \
-    --title "Claudy v$VERSION" \
+    "$ZIP_PATH#Buni.zip" \
+    --title "Buni v$VERSION" \
     --notes "## 설치 방법
 
-1. **Claudy.zip** 다운로드 후 압축 해제
-2. **Claudy.app** 을 Applications 폴더로 드래그
+1. **Buni.zip** 다운로드 후 압축 해제
+2. **Buni.app** 을 Applications 폴더로 드래그
 3. 처음 실행 시 Gatekeeper 경고가 나오면:
    - **시스템 설정 → 개인정보 보호 및 보안 → '확인 없이 열기'** 클릭
-   - 또는 터미널에서: \`xattr -dr com.apple.quarantine /Applications/Claudy.app\`
+   - 또는 터미널에서: \`xattr -dr com.apple.quarantine /Applications/Buni.app\`
 
 ## Claude Code 훅 설정
 
@@ -65,42 +65,42 @@ claude hooks add
 \`\`\`
 README를 참고하세요."
 
-RELEASE_URL="https://github.com/EloyYang/claudy/releases/tag/v$VERSION"
+RELEASE_URL="https://github.com/EloyYang/buni/releases/tag/v$VERSION"
 echo "✓ 릴리즈 완료: $RELEASE_URL"
 
 # ── 6. Homebrew tap 업데이트 (tap repo가 있을 때만)
-TAP_DIR="$HOME/homebrew-claudy"
+TAP_DIR="$HOME/homebrew-buni"
 if [ -d "$TAP_DIR" ]; then
     echo ""
     echo "▶ Homebrew tap 업데이트 중..."
-    cat > "$TAP_DIR/Casks/claudy.rb" << RUBY
-cask "claudy" do
+    cat > "$TAP_DIR/Casks/buni.rb" << RUBY
+cask "buni" do
   version "$VERSION"
   sha256 "$SHA256"
 
-  url "https://github.com/EloyYang/claudy/releases/download/v#{version}/Claudy.zip"
-  name "Claudy"
+  url "https://github.com/EloyYang/buni/releases/download/v#{version}/Buni.zip"
+  name "Buni"
   desc "Claude Code 메뉴바 컴패니언 앱"
-  homepage "https://github.com/EloyYang/claudy"
+  homepage "https://github.com/EloyYang/buni"
 
-  app "Claudy.app"
+  app "Buni.app"
 
   zap trash: [
-    "~/Library/Preferences/com.claudy.companion.plist",
+    "~/Library/Preferences/com.buni.companion.plist",
     "/tmp/claude-companion-events.jsonl",
   ]
 
   caveats <<~EOS
-    Claudy는 Apple 공증 없이 배포됩니다.
+    Buni는 Apple 공증 없이 배포됩니다.
     처음 실행 시 Gatekeeper 경고가 뜨면:
       시스템 설정 → 개인정보 보호 및 보안 → '확인 없이 열기'
-    또는: xattr -dr com.apple.quarantine /Applications/Claudy.app
+    또는: xattr -dr com.apple.quarantine /Applications/Buni.app
   EOS
 end
 RUBY
     cd "$TAP_DIR"
-    git add Casks/claudy.rb
-    git commit -m "claudy $VERSION"
+    git add Casks/buni.rb
+    git commit -m "buni $VERSION"
     git push
     echo "✓ Homebrew tap 업데이트됨"
 else
@@ -114,6 +114,6 @@ rm -f "$ZIP_PATH"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  ✅ Claudy v$VERSION 릴리즈 완료!"
+echo "  ✅ Buni v$VERSION 릴리즈 완료!"
 echo "  $RELEASE_URL"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
