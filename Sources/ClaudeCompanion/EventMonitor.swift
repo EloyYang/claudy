@@ -19,6 +19,7 @@ class EventMonitor {
     private var fileOffset      = 0
     private var claudeWasRunning = false
     private var isInitialCheck   = true   // 앱 시작 시 이미 실행 중인 경우 구분
+    private var hideTask:        DispatchWorkItem?
 
     init(controller: CompanionController) {
         self.controller = controller
@@ -67,6 +68,10 @@ class EventMonitor {
         claudeWasRunning = running
 
         if running {
+            // 대기 중인 숨기기 취소 (세션 전환 등으로 잠깐 꺼졌다 켜지는 경우)
+            hideTask?.cancel()
+            hideTask = nil
+
             DispatchQueue.main.async {
                 // 진짜 새 세션일 때만 리셋 (앱 시작 시 이미 실행 중이면 복원값 유지)
                 if !wasInitial {
@@ -77,14 +82,19 @@ class EventMonitor {
                 self.controller.update(to: .ready)
             }
         } else {
-            // claude가 종료됨 → 캐릭터 숨김
-            DispatchQueue.main.async {
-                self.controller.sessionStart = nil
+            // 2초 디바운스: 세션 전환 등으로 프로세스가 잠깐 사라졌다 복귀하면 숨기지 않음
+            let task = DispatchWorkItem { [weak self] in
+                guard let self, !self.isClaudeRunning() else { return }
+                DispatchQueue.main.async {
+                    self.controller.sessionStart = nil
+                }
+                self.controller.update(to: .idle)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    self.controller.onHideRequest?()
+                }
             }
-            controller.update(to: .idle)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                self.controller.onHideRequest?()
-            }
+            hideTask = task
+            queue.asyncAfter(deadline: .now() + 2.0, execute: task)
         }
     }
 
