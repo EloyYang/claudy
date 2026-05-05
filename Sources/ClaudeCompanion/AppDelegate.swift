@@ -190,7 +190,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                       hide: store.hide)
         hotkeyMonitor.onApprove = { [weak self] in self?.controller.approvePermission() }
         hotkeyMonitor.onDeny    = { [weak self] in self?.controller.denyPermission() }
-        hotkeyMonitor.onHide    = { [weak self] in self?.hideCompanion() }
+        hotkeyMonitor.onHide    = { [weak self] in self?.toggleVisibility() }
     }
 
     private func setupSettingsCallbacks() {

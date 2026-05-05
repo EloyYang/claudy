@@ -122,7 +122,7 @@ struct ShortcutSettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 KeyRecorderField(label: "권한 허락",  shortcut: $store.approve)
                 KeyRecorderField(label: "권한 거부",  shortcut: $store.deny)
-                KeyRecorderField(label: "캐릭터 숨기기", shortcut: $store.hide)
+                KeyRecorderField(label: "숨기기/보이기", shortcut: $store.hide)
             }
 
             Divider()
