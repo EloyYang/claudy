@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="Claudy"
 APP_BUNDLE="$SCRIPT_DIR/$APP_NAME.app"
 
+# VERSION 파일에서 버전 읽기
+VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "1.0.0")"
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Claudy.app 빌드"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -42,8 +45,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST'
     <key>CFBundleName</key>            <string>Claudy</string>
     <key>CFBundleDisplayName</key>     <string>Claudy</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
-    <key>CFBundleVersion</key>         <string>1.0</string>
-    <key>CFBundleShortVersionString</key> <string>1.0</string>
+    <key>CFBundleVersion</key>         <string>VERSION_PLACEHOLDER</string>
+    <key>CFBundleShortVersionString</key> <string>VERSION_PLACEHOLDER</string>
     <key>CFBundleIconFile</key>        <string>AppIcon</string>
     <key>NSPrincipalClass</key>        <string>NSApplication</string>
     <key>LSUIElement</key>             <true/>
@@ -52,7 +55,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << 'PLIST'
 </dict>
 </plist>
 PLIST
-echo "✓ Info.plist 생성됨"
+sed -i '' "s/VERSION_PLACEHOLDER/$VERSION/g" "$APP_BUNDLE/Contents/Info.plist"
+echo "✓ Info.plist 생성됨 (v$VERSION)"
 
 # ── 5. 아이콘 생성 (sips + iconutil)
 echo ""

@@ -18,6 +18,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var customPanelOrigin: NSPoint?
     private var dragEventMonitor: Any?
     private var lastMouseLocation: NSPoint = .zero
+    private var availableUpdate: String? = nil   // 새 버전이 있으면 "1.x.x"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         customPanelOrigin = loadSavedOrigin()
@@ -27,6 +28,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         startEventMonitor()
         setupHotkeyMonitor()
         setupSettingsCallbacks()
+        checkForUpdates()
     }
 
     // MARK: - Status bar
@@ -45,6 +47,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func rebuildMenu() {
         let menu = NSMenu()
+
+        // 새 버전 알림
+        if let ver = availableUpdate {
+            let item = NSMenuItem(title: "🆕 업데이트 v\(ver) — 다운로드",
+                                  action: #selector(downloadUpdate),
+                                  keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
 
         // 전체 허용 모드 활성 시 상태 표시 + 해제 버튼
         if controller.alwaysApprove {
@@ -67,6 +79,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: #selector(openSettings),
                                 keyEquivalent: ","))
         menu.addItem(.separator())
+
+        // 현재 버전 표시 (비활성)
+        let verItem = NSMenuItem(title: "Claudy v\(UpdateChecker.currentVersion)",
+                                 action: nil, keyEquivalent: "")
+        verItem.isEnabled = false
+        menu.addItem(verItem)
+
         menu.addItem(NSMenuItem(title: "종료",
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
@@ -74,6 +93,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             item.target = self
         }
         statusItem?.menu = menu
+    }
+
+    @objc private func downloadUpdate() {
+        UpdateChecker.openReleasePage()
+    }
+
+    private func checkForUpdates() {
+        // 앱 시작 3초 뒤에 조용히 확인
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            UpdateChecker.check { [weak self] newVersion in
+                guard let self, let ver = newVersion else { return }
+                self.availableUpdate = ver
+                self.rebuildMenu()
+            }
+        }
     }
 
     @objc private func disableAlwaysApprove() {
