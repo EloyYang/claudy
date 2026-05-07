@@ -1,6 +1,7 @@
 import Cocoa
 import SwiftUI
 import Combine
+import ServiceManagement
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayPanel: NSPanel?
@@ -17,7 +18,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // 사용자가 지정한 패널 위치 (nil이면 기본 오른쪽 상단)
     private var customPanelOrigin: NSPoint?
     private var dragEventMonitor: Any?
+    private var globalMouseMonitor: Any?
     private var lastMouseLocation: NSPoint = .zero
+    private var isDragging: Bool = false
     private var availableUpdate: String? = nil   // 새 버전이 있으면 "1.x.x"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -77,9 +80,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Claude 열기",
                                 action: #selector(openClaude),
                                 keyEquivalent: "o"))
+        menu.addItem(NSMenuItem(title: "위치 초기화",
+                                action: #selector(resetPosition),
+                                keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "단축키 설정...",
                                 action: #selector(openSettings),
                                 keyEquivalent: ","))
+
+        let loginItem = NSMenuItem(title: "부팅 시 자동 실행",
+                                   action: #selector(toggleLaunchAtLogin),
+                                   keyEquivalent: "")
+        loginItem.state = isLaunchAtLoginEnabled ? .on : .off
+        menu.addItem(loginItem)
+
         menu.addItem(NSMenuItem(title: "메뉴바 아이콘 숨기기",
                                 action: #selector(hideStatusBar),
                                 keyEquivalent: ""))
@@ -150,7 +163,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         controller.isSliding = true
-        let exitFrame = offScreenRightFrame(screen: screen)
+        // 현재 Y를 그대로 유지하고 X만 화면 밖으로 → 수평 슬라이드만
+        let currentY = panel.frame.origin.y
+        let exitFrame = NSRect(x: screen.visibleFrame.maxX,
+                               y: currentY,
+                               width: panelWidth, height: panelHeight)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.55
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -179,6 +196,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             overlayPanel?.animator().setFrame(targetFrame, display: true)
         } completionHandler: {
             self.controller.isSliding = false
+            self.updateMousePassthrough()   // 표시 완료 후 위치 재평가
         }
         rebuildMenu()
     }
@@ -188,6 +206,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return NSRect(x: screen.visibleFrame.maxX,
                       y: originY,
                       width: panelWidth, height: panelHeight)
+    }
+
+    @objc func resetPosition() {
+        controller.onResetPositionRequest?()
+    }
+
+    // MARK: - 부팅 시 자동 실행
+
+    private var isLaunchAtLoginEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        do {
+            if isLaunchAtLoginEnabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            // 권한 거부 등 오류 시 시스템 설정 안내
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+        }
+        rebuildMenu()
     }
 
     @objc func openClaude() {
@@ -205,7 +247,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         hostingView.autoresizingMask = [.width, .height]
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 310, height: 340),
+            contentRect: NSRect(x: 0, y: 0, width: 310, height: 200),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -232,6 +274,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 드래그로 위치 조정 — NSEvent 로컬 모니터로 마우스 델타를 직접 추적해 떨림 방지
         controller.onPanelDragStart = { [weak self] in
             guard let self else { return }
+            self.isDragging = true   // 드래그 중 ignoresMouseEvents 토글 방지
+            self.overlayPanel?.ignoresMouseEvents = false
             self.lastMouseLocation = NSEvent.mouseLocation
 
             self.dragEventMonitor = NSEvent.addLocalMonitorForEvents(
@@ -242,10 +286,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 if event.type == .leftMouseUp {
                     if let m = self.dragEventMonitor { NSEvent.removeMonitor(m) }
                     self.dragEventMonitor = nil
+                    self.isDragging = false
                     if let origin = self.overlayPanel?.frame.origin {
                         self.customPanelOrigin = origin
                         self.saveOrigin(origin)
                     }
+                    self.updateMousePassthrough()   // 드래그 종료 후 위치 재평가
                     return event
                 }
 
@@ -350,13 +396,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.isOpaque = false
         panel.hasShadow = false
         panel.isMovable = false
-        panel.ignoresMouseEvents = false
+        panel.ignoresMouseEvents = true   // 기본값: 클릭 통과 (마우스 위치에 따라 동적 전환)
         panel.level = NSWindow.Level(rawValue: Int(NSWindow.Level.floating.rawValue) + 5)
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
 
         let rootView = CompanionView()
             .environmentObject(controller)
-        panel.contentView = NSHostingView(rootView: rootView)
+        panel.contentView = ClickThroughHostingView(rootView: rootView)
         overlayPanel = panel
 
         controller.$state
@@ -364,6 +410,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .removeDuplicates()
             .sink { [weak self] state in self?.animatePanel(for: state) }
             .store(in: &cancellables)
+
+        setupMousePassthrough()
+    }
+
+    // MARK: - 마우스 위치 기반 클릭 통과
+
+    /// 마우스가 인터랙티브 영역(캐릭터/권한버블)에 있을 때만 패널이 이벤트를 수신하도록 토글.
+    /// NSHostingView.hitTest는 SwiftUI의 allowsHitTesting(false)를 다른 앱으로의 클릭 통과까지
+    /// 보장하지 않으므로, ignoresMouseEvents를 동적으로 제어하는 방식이 신뢰할 수 있다.
+    private func setupMousePassthrough() {
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
+        ) { [weak self] _ in
+            self?.updateMousePassthrough()
+        }
+    }
+
+    private func updateMousePassthrough() {
+        guard let panel = overlayPanel, panel.isVisible, !controller.isSliding, !isDragging else { return }
+        let mouse = NSEvent.mouseLocation
+        let shouldIgnore = !interactiveRect(for: panel).contains(mouse)
+        if panel.ignoresMouseEvents != shouldIgnore {
+            panel.ignoresMouseEvents = shouldIgnore
+        }
+    }
+
+    /// 마우스 이벤트를 수신해야 하는 영역 (스크린 좌표).
+    /// - 항상: 캐릭터 + 사용량 바 영역 (패널 우측 ~80px)
+    /// - permission 상태: 전체 하단 영역 (버블 버튼 포함)
+    private func interactiveRect(for panel: NSWindow) -> NSRect {
+        let f = panel.frame
+        let charWidth: CGFloat = 80
+        let charHeight: CGFloat = 90
+
+        if case .permission = controller.state {
+            // 권한 버블: 패널 전체 하단 영역
+            return NSRect(x: f.minX, y: f.minY, width: f.width, height: charHeight)
+        }
+        // 캐릭터 영역: 패널 우측 하단
+        return NSRect(x: f.maxX - charWidth, y: f.minY, width: charWidth, height: charHeight)
     }
 
     private func peekFrame(screen: NSScreen) -> NSRect {

@@ -14,13 +14,12 @@ enum CompanionState: Equatable {
 class CompanionController: ObservableObject {
     @Published var state: CompanionState = .idle
     @Published var usagePercent: Double = 0      // 컨텍스트 창 사용률 (내부용)
-    @Published var planUsagePercent: Double = 0  // 플랜 일일 한도 대비 사용률
-    @Published var planTokensToday: Int = 0       // 오늘 사용한 토큰 수
     @Published var sessionStart: Date? = nil
 
     // 서버에서 가져온 실제 플랜 사용량
     @Published var serverUtilization: Double? = nil  // five_hour.utilization (%)
     @Published var serverResetsAt: Date? = nil        // five_hour.resets_at
+    @Published var monthlyTokens: Int = 0             // 이번 달 누적 토큰 (JSONL 집계)
     @Published var isSliding: Bool = false
     @Published var alwaysApprove: Bool = false
     var pendingPermissionId: String? = nil

@@ -1,4 +1,5 @@
 import Cocoa
+import SwiftUI
 
 /// macOS의 자동 위치 제약(constrainFrameRect)을 무효화한 NSPanel.
 /// 기본 NSPanel은 setFrameOrigin 호출 시 가시 영역 밖으로 나가지 못하도록
@@ -11,3 +12,7 @@ final class UnconstrainedPanel: NSPanel {
         return frameRect
     }
 }
+
+/// ignoresMouseEvents 동적 제어와 함께 사용하는 NSHostingView 서브클래스.
+/// hitTest는 기본 동작 그대로 유지 — 클릭 통과는 AppDelegate의 ignoresMouseEvents로 제어한다.
+final class ClickThroughHostingView<T: View>: NSHostingView<T> {}

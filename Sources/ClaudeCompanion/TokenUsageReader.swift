@@ -23,6 +23,44 @@ final class TokenUsageReader {
         .homeDirectoryForCurrentUser
         .appendingPathComponent(".claude/projects")
 
+    /// 이번 달 누적 input+output 토큰 합계 (백그라운드에서 호출하세요)
+    static func readThisMonth() -> Int {
+        let cal  = Calendar.current
+        let comps = cal.dateComponents([.year, .month], from: Date())
+        guard let monthStart = cal.date(from: comps) else { return 0 }
+        let fm = FileManager.default
+
+        guard let enumerator = fm.enumerator(
+            at: projectsDir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+
+        var total = 0
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "jsonl" else { continue }
+            guard let rv   = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
+                  let mods = rv.contentModificationDate,
+                  mods >= monthStart else { continue }
+
+            guard let content = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            for line in content.components(separatedBy: "\n") where !line.isEmpty {
+                guard let data = line.data(using: .utf8),
+                      let obj  = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else { continue }
+
+                let usage: [String: Any]? =
+                    obj["usage"] as? [String: Any]
+                    ?? (obj["message"] as? [String: Any])?["usage"] as? [String: Any]
+                if let u = usage {
+                    total += u["input_tokens"]  as? Int ?? 0
+                    total += u["output_tokens"] as? Int ?? 0
+                }
+            }
+        }
+        return total
+    }
+
     /// 백그라운드에서 호출하세요.
     static func readToday() -> DailyTokens {
         let cal   = Calendar.current

@@ -27,25 +27,26 @@ struct CompanionView: View {
 
             HStack(alignment: .top, spacing: 19) {
                 // 권한 요청 중: 인터랙티브 버블 / 그 외: 일반 버블
+                // allowsHitTesting을 Group 레벨에 적용해 버블이 없을 때 영역이 클릭을 막지 않도록 함
                 Group {
                     if isPermission {
                         permissionBubbleView
-                            .allowsHitTesting(true)
                     } else {
                         regularBubbleView
-                            .allowsHitTesting(false)
                     }
                 }
                 .padding(.bottom, 6)
+                .allowsHitTesting(isPermission)
 
                 // 캐릭터 + 플랜 사용량 바
-                VStack(spacing: 1) {
+                VStack(spacing: -5) {
                     characterView
                         .frame(width: 60, height: 70)
 
                     UsageBarView(percent: ctrl.displayUsagePercent,
                                  label: ctrl.planTokenLabel,
-                                 resetTime: resetTimeString(from: resetTimeTick))
+                                 resetTime: resetTimeString(from: resetTimeTick),
+                                 monthlyTokens: ctrl.monthlyTokens)
                         .frame(width: 66)
                         .opacity(ctrl.state == .idle ? 0 : 1)
                         .animation(.easeInOut(duration: 0.3), value: ctrl.state == .idle)
@@ -137,8 +138,8 @@ struct CompanionView: View {
         switch characterStore.selected {
         case .rabbit:
             RabbitCharacterView()
-        case .jellyfish:
-            JellyfishCharacterView()
+        case .brownRabbit:
+            BrownRabbitCharacterView()
         }
     }
 
@@ -168,7 +169,7 @@ struct CompanionView: View {
 
     private var bubbleMessage: String? {
         switch ctrl.state {
-        case .thinking:              return String(repeating: ".", count: dotCount)
+        case .thinking:              return "코드짜는중" + String(repeating: ".", count: dotCount)
         case .toolUse(let name):     return name
         case .notification(let msg): return msg
         case .permission:            return nil   // permissionBubbleView가 담당

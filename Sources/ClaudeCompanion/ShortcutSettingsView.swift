@@ -109,66 +109,12 @@ struct KeyRecorderField: View {
 
 struct ShortcutSettingsView: View {
     @ObservedObject private var store = ShortcutStore.shared
-    @State private var customLimitText: String = ""
-
-    private let presets: [(label: String, valueK: Int)] = [
-        ("500K",  500),
-        ("1M",   1000),
-        ("2M",   2000),
-        ("5M",   5000),
-    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("설정")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.white)
-
-            Divider().background(Color.white.opacity(0.2))
-
-            // ── 플랜 일일 한도
-            VStack(alignment: .leading, spacing: 8) {
-                Text("플랜 일일 토큰 한도")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.85))
-
-                HStack(spacing: 6) {
-                    ForEach(presets, id: \.valueK) { preset in
-                        Button(preset.label) {
-                            store.planDailyLimitK = preset.valueK
-                            customLimitText = ""
-                        }
-                        .buttonStyle(PillButtonStyle(
-                            color: store.planDailyLimitK == preset.valueK
-                                ? .accentColor : .init(white: 0.3)
-                        ))
-                    }
-                }
-
-                HStack(spacing: 6) {
-                    Text("직접 입력 (K):")
-                        .font(.system(size: 10))
-                        .foregroundColor(.white.opacity(0.5))
-                    TextField("\(store.planDailyLimitK)", text: $customLimitText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.white)
-                        .frame(width: 60)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.white.opacity(0.08)))
-                        .onSubmit {
-                            if let v = Int(customLimitText), v > 0 {
-                                store.planDailyLimitK = v
-                            }
-                            customLimitText = ""
-                        }
-                    Text("= \(store.planDailyLimitK >= 1000 ? "\(store.planDailyLimitK/1000)M" : "\(store.planDailyLimitK)K") / 일")
-                        .font(.system(size: 10))
-                        .foregroundColor(.white.opacity(0.4))
-                }
-            }
 
             Divider().background(Color.white.opacity(0.2))
 
@@ -197,7 +143,7 @@ struct ShortcutSettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 310)
+        .frame(width: 310, height: 200)
         .background(Color(red: 0.12, green: 0.12, blue: 0.14))
         .onChange(of: store.approve) { _ in store.save() }
         .onChange(of: store.deny)    { _ in store.save() }

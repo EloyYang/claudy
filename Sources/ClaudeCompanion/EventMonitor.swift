@@ -16,7 +16,6 @@ class EventMonitor {
 
     private let queue     = DispatchQueue(label: "claude.companion.events", qos: .background)
     private var timer:       DispatchSourceTimer?
-    private var planTimer:   DispatchSourceTimer?
     private var serverTimer: DispatchSourceTimer?
     private static let serverUsageFile = "/tmp/claude-companion-plan-usage.json"
     private static let fetchScript = NSHomeDirectory() + "/.claude/companion-fetch-usage.py"
@@ -60,19 +59,23 @@ class EventMonitor {
         t.resume()
         timer = t
 
-        // 플랜 사용량: 60초 간격으로 JSONL 파일 집계 (로컬 추정)
-        let pt = DispatchSource.makeTimerSource(queue: queue)
-        pt.schedule(deadline: .now(), repeating: .seconds(60))
-        pt.setEventHandler { [weak self] in self?.updatePlanUsage() }
-        pt.resume()
-        planTimer = pt
-
         // 서버 플랜 사용량: 시작 즉시 + 5분마다 Python 스크립트로 가져옴
         let st = DispatchSource.makeTimerSource(queue: queue)
         st.schedule(deadline: .now() + 2, repeating: .seconds(300))
-        st.setEventHandler { [weak self] in self?.fetchServerUsage() }
+        st.setEventHandler { [weak self] in
+            self?.fetchServerUsage()
+            self?.updateMonthlyTokens()
+        }
         st.resume()
         serverTimer = st
+
+        // 앱 시작 시 월별 토큰 즉시 읽기
+        queue.async { [weak self] in self?.updateMonthlyTokens() }
+    }
+
+    private func updateMonthlyTokens() {
+        let total = TokenUsageReader.readThisMonth()
+        DispatchQueue.main.async { self.controller.monthlyTokens = total }
     }
 
     // MARK: - 서버 플랜 사용량 (claude.ai API)
@@ -128,21 +131,6 @@ class EventMonitor {
         DispatchQueue.main.async {
             self.controller.serverUtilization = utilization
             self.controller.serverResetsAt    = resetsAt
-        }
-    }
-
-    // MARK: - 플랜 일일 사용량 (로컬 추정)
-
-    private func updatePlanUsage() {
-        let tokens  = TokenUsageReader.readToday()
-        let limitK  = ShortcutStore.shared.planDailyLimitK
-        let limit   = limitK * 1_000
-        let percent = limit > 0
-            ? min(100, Double(tokens.total) / Double(limit) * 100)
-            : 0
-        DispatchQueue.main.async {
-            self.controller.planTokensToday  = tokens.total
-            self.controller.planUsagePercent = percent
         }
     }
 

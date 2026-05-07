@@ -4,13 +4,13 @@ import Combine
 // MARK: - Character type
 
 enum CharacterType: String, CaseIterable {
-    case rabbit    = "rabbit"
-    case jellyfish = "jellyfish"
+    case rabbit      = "rabbit"
+    case brownRabbit = "brownRabbit"
 
     var displayName: String {
         switch self {
-        case .rabbit:    return "부니 (토끼)"
-        case .jellyfish: return "젤리 (해파리)"
+        case .rabbit:      return "부니 (흰토끼)"
+        case .brownRabbit: return "두니 (갈색토끼)"
         }
     }
 }
