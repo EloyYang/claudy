@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION="${1:?사용법: ./release.sh <버전>  예) ./release.sh 1.0.1}"
 APP_BUNDLE="$SCRIPT_DIR/Buni.app"
-ZIP_NAME="Buni-${VERSION}.zip"
+ZIP_NAME="Buni-macOS-${VERSION}.zip"
 ZIP_PATH="$SCRIPT_DIR/$ZIP_NAME"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -48,22 +48,33 @@ echo "✓ v$VERSION 태그 푸시됨"
 echo ""
 echo "▶ GitHub Release 생성 중..."
 gh release create "v$VERSION" \
-    "$ZIP_PATH#Buni.zip" \
+    "$ZIP_PATH#Buni-macOS.zip" \
     --title "Buni v$VERSION" \
-    --notes "## 설치 방법
+    --notes "## 🍎 macOS 설치
 
-1. **Buni.zip** 다운로드 후 압축 해제
+1. **Buni-macOS.zip** 다운로드 후 압축 해제
 2. **Buni.app** 을 Applications 폴더로 드래그
-3. 처음 실행 시 Gatekeeper 경고가 나오면:
-   - **시스템 설정 → 개인정보 보호 및 보안 → '확인 없이 열기'** 클릭
-   - 또는 터미널에서: \`xattr -dr com.apple.quarantine /Applications/Buni.app\`
+3. 처음 실행 시 Gatekeeper 경고가 뜨면:
+   - 시스템 설정 → 개인정보 보호 및 보안 → **확인 없이 열기**
+   - 또는 터미널: \`xattr -dr com.apple.quarantine /Applications/Buni.app\`
+4. Claude Code 훅 설정:
+   \`\`\`bash
+   cd buni && bash install.sh
+   \`\`\`
 
-## Claude Code 훅 설정
+---
 
-\`\`\`bash
-claude hooks add
-\`\`\`
-README를 참고하세요."
+## 🪟 Windows 설치
+
+1. **Buni-Windows.exe** 다운로드 후 실행
+2. Claude Code 훅 설정 (최초 1회):
+   \`\`\`bat
+   curl -L https://raw.githubusercontent.com/EloyYang/buni/main/windows/install_hooks.py -o install_hooks.py
+   python install_hooks.py
+   \`\`\`
+
+> Windows exe는 Python 설치 없이 바로 실행됩니다.
+> *(Buni-Windows.exe는 GitHub Actions가 자동 빌드해 수 분 내 추가됩니다)*"
 
 RELEASE_URL="https://github.com/EloyYang/buni/releases/tag/v$VERSION"
 echo "✓ 릴리즈 완료: $RELEASE_URL"
@@ -78,7 +89,7 @@ cask "buni" do
   version "$VERSION"
   sha256 "$SHA256"
 
-  url "https://github.com/EloyYang/buni/releases/download/v#{version}/Buni.zip"
+  url "https://github.com/EloyYang/buni/releases/download/v#{version}/Buni-macOS.zip"
   name "Buni"
   desc "Claude Code 메뉴바 컴패니언 앱"
   homepage "https://github.com/EloyYang/buni"
