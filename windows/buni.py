@@ -111,8 +111,12 @@ class BuniApp:
         # ── Background monitoring thread
         threading.Thread(target=self._monitor_loop, daemon=True).start()
 
-        # ── Schedule idle blink
+        # ── Schedule idle blink & hop
         self._schedule_blink()
+        self._schedule_idle_hop()
+
+        # ── 30초마다 게이지 라벨(초기화 시간) 갱신
+        self._tick_bar_refresh()
 
         # ── Optional system tray
         self._tray_thread: threading.Thread | None = None
@@ -336,51 +340,57 @@ class BuniApp:
         filled = int(self._usage * SEG + 0.5)
         filled = max(0, min(SEG, filled))
 
-        # ── 캐릭터 발 바로 아래부터 시작
         # 캐릭터 발 bottom: CHAR_CY + P*3.35 ≈ +21.8px
         feet_bottom = CHAR_CY + P*3.35
-        lv_y  = feet_bottom + 6    # 레벨 라벨 y
-        bar_y = lv_y + 13          # 게이지 바 top-y
+        lv_y  = feet_bottom + 8
+        bar_y = lv_y + 14
+        label_y = bar_y + SH + BW + 9
 
-        # ── 1. 레벨 (바 위 왼쪽, 맥용 size=7 bold)
-        level = self._monthly_tokens // 500_000 + 1
+        level     = self._monthly_tokens // 500_000 + 1
+        pct_str   = f'{round(self._usage * 100)}%'
+        reset_str = self._reset_time_str()
+
+        # ── 텍스트 배경 패널 (안티앨리어싱 검정 테두리 방지)
+        pad_x = 5; pad_y = 4
+        panel_x0 = bx - pad_x
+        panel_y0 = lv_y - 8
+        panel_x1 = bx + w + pad_x
+        panel_y1 = label_y + 8
+        self._rounded_rect(panel_x0, panel_y0, panel_x1, panel_y1,
+                           6, '#1E1E1E', '', 'bar')
+
+        # ── 1. 레벨 (바 위 왼쪽)
         self.cv.create_text(bx, lv_y, text=f'★ Lv.{level}',
                              anchor='w', font=('Consolas', 7, 'bold'),
                              fill='#F2CC25', tags='bar')
 
-        # ── 2. 게이지 바 (라운드 테두리 + 세그먼트)
-        r = 3   # corner radius (맥용 cornerRadius: 3)
+        # ── 2. 게이지 바 (라운드 테두리)
         self._rounded_rect(bx - BW, bar_y - BW,
                            bx + w + BW, bar_y + SH + BW,
-                           r, '', '#999999', 'bar')
+                           3, '', '#666666', 'bar')
 
         for i in range(SEG):
             ratio = (i+1)/SEG
             if ratio <= 0.50:   fc = '#4DDA59'
             elif ratio <= 0.75: fc = '#F2CC25'
             else:               fc = '#F24D33'
-            color = fc if i < filled else '#151515'
             sx = bx + i*(sw+GAP)
-            # 세그먼트 칸
-            self.cv.create_rectangle(sx, bar_y, sx+sw, bar_y+SH,
-                                      fill=color, outline='', tags='bar')
-            # 채워진 세그먼트에 흰 하이라이트 (맥용과 동일)
             if i < filled:
+                self.cv.create_rectangle(sx, bar_y, sx+sw, bar_y+SH,
+                                          fill=fc, outline='', tags='bar')
+                # 흰 하이라이트
                 self.cv.create_rectangle(sx, bar_y, sx+sw, bar_y+2,
-                                          fill='#ffffff47', outline='', tags='bar')
+                                          fill='#FFFFFF', outline='', tags='bar')
+            # 빈 세그먼트는 패널 배경색(#1E1E1E)이 비침 → 별도 그리기 불필요
 
-        # ── 3. 바 아래: 왼쪽 사용량%, 오른쪽 초기화시간 (맥용 size=7)
-        label_y = bar_y + SH + 10
-        pct_str = f'{round(self._usage * 100)}%'
+        # ── 3. 바 아래: 왼쪽 %, 오른쪽 ↺ H:MM
         self.cv.create_text(bx, label_y, text=pct_str,
                              anchor='w', font=('Consolas', 7),
-                             fill='#888888', tags='bar')
-
-        reset_str = self._reset_time_str()
+                             fill='#AAAAAA', tags='bar')
         if reset_str:
             self.cv.create_text(bx + w, label_y, text=f'↺ {reset_str}',
                                  anchor='e', font=('Consolas', 7),
-                                 fill='#888888', tags='bar')
+                                 fill='#AAAAAA', tags='bar')
 
     def _reset_time_str(self) -> str:
         """sessionStart+5h 기준 남은 시간 (맥용과 동일한 로직)."""
@@ -482,6 +492,53 @@ class BuniApp:
     def _end_blink(self):
         self.blinking = False; self._draw()
         self._schedule_blink()
+
+    # ── 30초마다 게이지 라벨(초기화 시간) 갱신 ───────────────────
+
+    def _tick_bar_refresh(self):
+        if self.state != 'idle':
+            self._draw()
+        self.root.after(30_000, self._tick_bar_refresh)
+
+    # ── Idle hop animation (ready 상태) ──────────────────────────
+
+    def _schedule_idle_hop(self):
+        import random
+        delay = random.randint(5000, 14000)
+        self.root.after(delay, self._do_idle_hop)
+
+    def _do_idle_hop(self):
+        if self.state != 'ready':
+            self._schedule_idle_hop()
+            return
+        import random
+        anim = random.choice(['hop', 'ear'])
+        if anim == 'hop':
+            self._hop_anim()
+        else:
+            self._ear_anim()
+
+    def _hop_anim(self):
+        """작은 점프 애니메이션."""
+        up   = [0, -P*0.8, -P*1.5, -P*1.8, -P*1.5, -P*0.8, 0]
+        def step(i=0):
+            if i >= len(up):
+                self.body_dy = 0; self._draw()
+                self._schedule_idle_hop(); return
+            self.body_dy = up[i]; self._draw()
+            self.root.after(40, lambda: step(i+1))
+        step()
+
+    def _ear_anim(self):
+        """귀 기울이기 애니메이션 (body_dx로 표현)."""
+        frames = [0, P*0.5, P*1.0, P*0.5, 0, -P*0.5, 0]
+        def step(i=0):
+            if i >= len(frames):
+                self.body_dx = 0; self._draw()
+                self._schedule_idle_hop(); return
+            self.body_dx = frames[i]; self._draw()
+            self.root.after(60, lambda: step(i+1))
+        step()
 
     # ── State machine ─────────────────────────────────────────
 
