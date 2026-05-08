@@ -14,9 +14,9 @@ from pathlib import Path
 P = 6.5
 
 # ── Window geometry
-WIN_W, WIN_H = 340, 180
-CHAR_CX = WIN_W - 52   # character center-X inside window
-CHAR_CY = WIN_H - 32   # character center-Y inside window
+WIN_W, WIN_H = 340, 220          # 높이 220: 캐릭터(~160) + 레벨+바+라벨(~60)
+CHAR_CX = WIN_W - 52             # character center-X inside window
+CHAR_CY = WIN_H - 80             # character center-Y (위쪽으로 올려서 아래 공간 확보)
 
 # ── Transparent-color key (used as WM transparent color on Windows)
 TRANSP = '#010101'
@@ -327,20 +327,23 @@ class BuniApp:
         if self.state == 'idle':
             return
 
-        # ── 좌표 기준 (맥용과 동일한 비율)
-        SEG   = 10; GAP = 2; BW = 1.5
-        SH    = 9          # segment height
-        bx    = CHAR_CX - P*3.3
-        bar_y = CHAR_CY + P*4.0   # 게이지 바 top-y
-        w     = P*6.6
-        sw    = (w - GAP*(SEG-1)) / SEG
+        SEG = 10; GAP = 2; BW = 1.5
+        SH  = 9   # segment height (px)
+        bx  = CHAR_CX - P*3.3
+        w   = P*6.6
+        sw  = (w - GAP*(SEG-1)) / SEG
 
         filled = int(self._usage * SEG + 0.5)
         filled = max(0, min(SEG, filled))
 
+        # ── 캐릭터 발 바로 아래부터 시작
+        # 캐릭터 발 bottom: CHAR_CY + P*3.35 ≈ +21.8px
+        feet_bottom = CHAR_CY + P*3.35
+        lv_y  = feet_bottom + 6    # 레벨 라벨 y
+        bar_y = lv_y + 13          # 게이지 바 top-y
+
         # ── 1. 레벨 (바 위 왼쪽, 맥용 size=7 bold)
         level = self._monthly_tokens // 500_000 + 1
-        lv_y  = bar_y - 12
         self.cv.create_text(bx, lv_y, text=f'★ Lv.{level}',
                              anchor='w', font=('Consolas', 7, 'bold'),
                              fill='#F2CC25', tags='bar')
