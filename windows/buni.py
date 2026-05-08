@@ -608,9 +608,12 @@ class BuniApp:
     def _is_claude_running() -> bool:
         try:
             import subprocess
+            CREATE_NO_WINDOW = 0x08000000
             out = subprocess.check_output(
                 ['tasklist', '/FI', 'IMAGENAME eq claude.exe', '/NH'],
-                stderr=subprocess.DEVNULL, text=True
+                stderr=subprocess.DEVNULL,
+                text=True,
+                creationflags=CREATE_NO_WINDOW,
             )
             return 'claude.exe' in out.lower()
         except Exception:
