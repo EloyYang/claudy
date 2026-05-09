@@ -138,10 +138,12 @@ class EventMonitor {
 
     // MARK: - 세션 종료 감지
 
-    /// 파일이 5분 이상 변화 없으면 크래시·강제종료로 간주하여 세션 종료
-    /// 정상 종료는 AppDelegate의 프로세스 감지가 담당
+    /// 파일이 30분 이상 변화 없으면 크래시·강제종료로 간주하여 세션 종료
+    /// 정상 종료는 AppDelegate의 프로세스 감지가 담당.
+    /// Claude가 유저 입력을 기다리는 동안(idle)에는 이벤트가 없으므로
+    /// 짧은 타임아웃은 false positive를 유발함.
     private func checkStaleness() {
-        guard Date().timeIntervalSince(lastEventDate) > 300 else { return }
+        guard Date().timeIntervalSince(lastEventDate) > 1800 else { return }
         fireSessionEnded()
     }
 

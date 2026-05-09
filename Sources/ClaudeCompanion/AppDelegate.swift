@@ -80,14 +80,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             claudeNotRunningStreak += 1
         }
 
-        if claudeWasRunning && claudeNotRunningStreak >= 3 {
-            // Claude가 확실히 종료됨 — 모든 세션 제거 + 무시 목록 초기화
+        if claudeWasRunning && claudeNotRunningStreak >= 6 {
+            // Claude가 확실히 종료됨 — 모든 세션 제거
+            // ※ ignoredSessionIds는 초기화하지 않음: 초기화하면 sysctl 오탐 시
+            //   기존 이벤트 파일이 "새 세션"으로 재탐지되어 사라졌다가 다시 나오는 버그 발생.
+            //   Claude가 재시작하면 새 UUID로 새 파일을 생성하므로 초기화 불필요.
             claudeWasRunning = false
             let ids = Array(sessions.keys)
             if !ids.isEmpty {
                 DispatchQueue.main.async {
                     ids.forEach { self.removeSession(id: $0) }
-                    self.ignoredSessionIds.removeAll()  // 재시작 때 새 세션 탐지 허용
                 }
             }
         } else if claudeRunning {
