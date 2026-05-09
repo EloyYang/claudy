@@ -40,13 +40,18 @@ class SessionWindow {
         self.customOrigin = savedOrigin
 
         let ctrl = CompanionController()
-        // 세션별 저장된 캐릭터 복원 (없으면 전역 기본값 그대로 유지)
+        // 캐릭터 복원: 세션 UUID → 슬롯 기반 → 전역 기본값 순서로 시도
         if let raw  = UserDefaults.standard.string(forKey: "character.session.\(sessionId)"),
            let type = CharacterType(rawValue: raw) {
             ctrl.character = type
+        } else if let raw  = UserDefaults.standard.string(forKey: "character.slot.\(slot)"),
+                  let type = CharacterType(rawValue: raw) {
+            ctrl.character = type
         }
-        // 세션별 메모 복원
+        // 메모 복원: 세션 UUID → 슬롯 기반 순서로 시도
         if let savedMemo = UserDefaults.standard.string(forKey: "memo.session.\(sessionId)") {
+            ctrl.memo = savedMemo
+        } else if let savedMemo = UserDefaults.standard.string(forKey: "memo.slot.\(slot)") {
             ctrl.memo = savedMemo
         }
         self.controller = ctrl
@@ -58,14 +63,15 @@ class SessionWindow {
 
     // MARK: - Lifecycle
 
-    func setup() {
+    /// autoShow: false이면 패널을 초기화하되 화면에 표시하지 않음 (사용자가 숨긴 상태 유지)
+    func setup(autoShow: Bool = true) {
         setupPanel()
         setupControllerCallbacks()
         setupMousePassthrough()
         monitor.start()
         DispatchQueue.main.async {
             self.controller.sessionStart = Date()
-            self.showCompanion()
+            if autoShow { self.showCompanion() }
             self.controller.update(to: .ready)
         }
     }
@@ -205,6 +211,8 @@ class SessionWindow {
     private func animatePanel(isIdle: Bool) {
         guard !controller.isSliding else { return }
         guard let panel = panel, let screen = NSScreen.main else { return }
+        // 사용자가 숨긴 패널은 애니메이션 금지 — animator()가 hidden 패널을 깨울 수 있음
+        guard panel.isVisible else { return }
         let target = isIdle ? peekFrame(screen: screen) : activeFrame(screen: screen)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration       = 0.45
@@ -251,16 +259,20 @@ class SessionWindow {
         controller.onShowStatusBarRequest = { [weak self] in self?.onShowStatusBar?() }
         controller.onEditMemoRequest      = { [weak self] in self?.showMemoEditDialog() }
 
-        // 메모 변경 시 UserDefaults에 영속 저장
+        // 메모 변경 시 세션 UUID + 슬롯 키 모두 저장 (슬롯 키로 다음 세션에 복원)
         controller.$memo
             .receive(on: DispatchQueue.main)
             .dropFirst()
             .sink { [weak self] memo in
                 guard let self else { return }
+                let sessionKey = "memo.session.\(self.sessionId)"
+                let slotKey    = "memo.slot.\(self.slot)"
                 if memo.isEmpty {
-                    UserDefaults.standard.removeObject(forKey: "memo.session.\(self.sessionId)")
+                    UserDefaults.standard.removeObject(forKey: sessionKey)
+                    UserDefaults.standard.removeObject(forKey: slotKey)
                 } else {
-                    UserDefaults.standard.set(memo, forKey: "memo.session.\(self.sessionId)")
+                    UserDefaults.standard.set(memo, forKey: sessionKey)
+                    UserDefaults.standard.set(memo, forKey: slotKey)
                 }
             }
             .store(in: &cancellables)
@@ -279,7 +291,7 @@ class SessionWindow {
         controller.onPanelDrag      = { _ in }
         controller.onPanelDragEnd   = { }
 
-        // 캐릭터 변경 시 세션별로 UserDefaults에 저장
+        // 캐릭터 변경 시 세션 UUID + 슬롯 키 모두 저장 (슬롯 키로 다음 세션에 복원)
         controller.$character
             .receive(on: DispatchQueue.main)
             .dropFirst()   // 초기값은 이미 복원된 값이므로 저장 건너뜀
@@ -287,6 +299,8 @@ class SessionWindow {
                 guard let self else { return }
                 UserDefaults.standard.set(type.rawValue,
                                           forKey: "character.session.\(self.sessionId)")
+                UserDefaults.standard.set(type.rawValue,
+                                          forKey: "character.slot.\(self.slot)")
             }
             .store(in: &cancellables)
 

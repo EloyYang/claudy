@@ -22,6 +22,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var claudeWasRunning = false
     private var isInitialScan    = true
 
+    // ── 사용자가 명시적으로 숨긴 상태 — true이면 새 세션도 자동 표시하지 않음
+    private var isManuallyHidden = false
+
     // ── 위치 영속성 (슬롯 0 전용)
     private var savedOrigin: NSPoint? {
         get {
@@ -162,18 +165,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard sessions[id] == nil else { return }
 
         // 실제 Claude 세션이 추가될 때 레거시 대기 세션 교체
-        // (레거시는 항상 1개 보장용이므로 실제 세션이 생기면 불필요)
         if id != "__legacy__" {
             dismissLegacySession()
         }
 
-        // 이 세션에 저장된 캐릭터가 없으면 현재 활성 세션들과 겹치지 않는 캐릭터 배정
+        let slot = nextAvailableSlot()
+
+        // 캐릭터 우선순위: 세션 UUID 저장값 → 슬롯 저장값 → pickCharacter
         if UserDefaults.standard.string(forKey: "character.session.\(id)") == nil {
-            let assigned = pickCharacter(for: id)
-            UserDefaults.standard.set(assigned.rawValue, forKey: "character.session.\(id)")
+            let inUse = Set(sessions.values.map { $0.controller.character })
+            if let raw  = UserDefaults.standard.string(forKey: "character.slot.\(slot)"),
+               let type = CharacterType(rawValue: raw), !inUse.contains(type) {
+                // 슬롯에 저장된 캐릭터가 다른 세션과 겹치지 않으면 그대로 사용
+                UserDefaults.standard.set(raw, forKey: "character.session.\(id)")
+            } else {
+                // 없거나 겹치면 사용 안 된 캐릭터 자동 배정
+                let assigned = pickCharacter(for: id)
+                UserDefaults.standard.set(assigned.rawValue, forKey: "character.session.\(id)")
+            }
         }
 
-        let slot = nextAvailableSlot()
         let origin = slot == 0 ? savedOrigin : nil
         let win = SessionWindow(sessionId: id, slot: slot,
                                 eventFile: fileURL.path,
@@ -182,7 +193,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sessions[id] = win
         slotOwner[slot] = id
         sessionOrder.insert(id, at: 0)
-        win.setup()
+        // 사용자가 명시적으로 숨긴 상태라면 새 세션도 표시하지 않음
+        win.setup(autoShow: !isManuallyHidden)
         rebuildMenu()
         syncHotkeyPermissionState()
     }
@@ -343,8 +355,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func toggleVisibility() {
         let anyVisible = sessions.values.contains { $0.panel?.isVisible == true }
         if anyVisible {
+            isManuallyHidden = true
             sessions.values.forEach { $0.hideCompanion() }
         } else {
+            isManuallyHidden = false
             sessions.values.forEach { $0.showCompanion() }
         }
     }
