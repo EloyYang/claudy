@@ -125,8 +125,9 @@ struct ShortcutSettingsView: View {
                     .foregroundColor(.white.opacity(0.85))
 
                 VStack(alignment: .leading, spacing: 12) {
-                    KeyRecorderField(label: "권한 허락",    shortcut: $store.approve)
-                    KeyRecorderField(label: "권한 거부",    shortcut: $store.deny)
+                    KeyRecorderField(label: "권한 허락",     shortcut: $store.approve)
+                    KeyRecorderField(label: "전체 허용",     shortcut: $store.alwaysApprove)
+                    KeyRecorderField(label: "권한 거부",     shortcut: $store.deny)
                     KeyRecorderField(label: "숨기기/보이기", shortcut: $store.hide)
                 }
             }
@@ -143,11 +144,12 @@ struct ShortcutSettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 310, height: 200)
+        .frame(width: 310, height: 240)
         .background(Color(red: 0.12, green: 0.12, blue: 0.14))
-        .onChange(of: store.approve) { _ in store.save() }
-        .onChange(of: store.deny)    { _ in store.save() }
-        .onChange(of: store.hide)    { _ in store.save() }
+        .onChange(of: store.approve)       { _ in store.save() }
+        .onChange(of: store.alwaysApprove) { _ in store.save() }
+        .onChange(of: store.deny)          { _ in store.save() }
+        .onChange(of: store.hide)          { _ in store.save() }
     }
 }
 

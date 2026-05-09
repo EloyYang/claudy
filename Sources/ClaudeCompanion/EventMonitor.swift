@@ -12,33 +12,39 @@ private struct ClaudeEvent: Decodable {
 
 class EventMonitor {
     private let controller: CompanionController
-    static let eventFile = "/tmp/claude-companion-events.jsonl"
+    let eventFile: String
 
-    private let queue     = DispatchQueue(label: "claude.companion.events", qos: .background)
+    private let queue = DispatchQueue(label: "claude.companion.events", qos: .background)
     private var timer:       DispatchSourceTimer?
     private var serverTimer: DispatchSourceTimer?
     private static let serverUsageFile = "/tmp/claude-companion-plan-usage.json"
     private static let fetchScript = NSHomeDirectory() + "/.claude/companion-fetch-usage.py"
-    private var fileOffset      = 0
-    private var claudeWasRunning = false
-    private var isInitialCheck   = true   // 앱 시작 시 이미 실행 중인 경우 구분
-    private var hideTask:        DispatchWorkItem?
 
-    init(controller: CompanionController) {
+    private var fileOffset    = 0
+    private var lastEventDate = Date()
+
+    /// done 이벤트 + 30초 무활동 시, 또는 90초 강제 타임아웃 시 호출
+    var onSessionEnded: (() -> Void)?
+
+    // ── 레거시 단일 파일 경로 (하위 호환)
+    static let legacyEventFile = "/tmp/claude-companion-events.jsonl"
+
+    init(controller: CompanionController, eventFile: String) {
         self.controller = controller
-        if !FileManager.default.fileExists(atPath: Self.eventFile) {
-            FileManager.default.createFile(atPath: Self.eventFile, contents: nil)
+        self.eventFile  = eventFile
+
+        if !FileManager.default.fileExists(atPath: eventFile) {
+            FileManager.default.createFile(atPath: eventFile, contents: nil)
         }
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: Self.eventFile),
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: eventFile),
            let size  = attrs[.size] as? Int {
             fileOffset = size   // 새 이벤트만 읽음
         }
-        // 앱 재시작 시 파일에서 마지막 usage 값 복원
         restoreLastUsage()
     }
 
     private func restoreLastUsage() {
-        guard let text = try? String(contentsOfFile: Self.eventFile, encoding: .utf8) else { return }
+        guard let text = try? String(contentsOfFile: eventFile, encoding: .utf8) else { return }
         let lastUsage = text.components(separatedBy: "\n")
             .reversed()
             .first(where: { $0.contains("\"usage\"") })
@@ -53,13 +59,12 @@ class EventMonitor {
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now(), repeating: .milliseconds(500))
         t.setEventHandler { [weak self] in
-            self?.checkProcess()
             self?.pollFile()
+            self?.checkStaleness()
         }
         t.resume()
         timer = t
 
-        // 서버 플랜 사용량: 시작 즉시 + 5분마다 Python 스크립트로 가져옴
         let st = DispatchSource.makeTimerSource(queue: queue)
         st.schedule(deadline: .now() + 2, repeating: .seconds(300))
         st.setEventHandler { [weak self] in
@@ -69,8 +74,12 @@ class EventMonitor {
         st.resume()
         serverTimer = st
 
-        // 앱 시작 시 월별 토큰 즉시 읽기
         queue.async { [weak self] in self?.updateMonthlyTokens() }
+    }
+
+    func stop() {
+        timer?.cancel();       timer = nil
+        serverTimer?.cancel(); serverTimer = nil
     }
 
     private func updateMonthlyTokens() {
@@ -78,9 +87,8 @@ class EventMonitor {
         DispatchQueue.main.async { self.controller.monthlyTokens = total }
     }
 
-    // MARK: - 서버 플랜 사용량 (claude.ai API)
+    // MARK: - 서버 플랜 사용량
 
-    /// playwright가 설치된 python3 경로를 반환
     private static func findPython3() -> String {
         let candidates = [
             "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
@@ -96,18 +104,13 @@ class EventMonitor {
     }
 
     private func fetchServerUsage() {
-        // 스크립트가 없으면 스킵
         guard FileManager.default.fileExists(atPath: Self.fetchScript) else { return }
-
-        // playwright가 있는 python3로 실행
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: Self.findPython3())
         proc.arguments = [Self.fetchScript]
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError  = FileHandle.nullDevice
         try? proc.run()
-
-        // 스크립트 완료 후 파일 읽기 (최대 30초 대기)
         queue.asyncAfter(deadline: .now() + 30) { [weak self] in
             self?.readServerUsageFile()
         }
@@ -127,92 +130,37 @@ class EventMonitor {
                 return fmt.date(from: s)
             }()
         }
-
         DispatchQueue.main.async {
             self.controller.serverUtilization = utilization
             self.controller.serverResetsAt    = resetsAt
         }
     }
 
-    // MARK: - 프로세스 감시
+    // MARK: - 세션 종료 감지
 
-    private func checkProcess() {
-        let running = isClaudeRunning()
-        let wasInitial = isInitialCheck
-        isInitialCheck = false
-
-        guard running != claudeWasRunning else { return }
-        claudeWasRunning = running
-
-        if running {
-            // 대기 중인 숨기기 취소 (세션 전환 등으로 잠깐 꺼졌다 켜지는 경우)
-            hideTask?.cancel()
-            hideTask = nil
-
-            DispatchQueue.main.async {
-                // 진짜 새 세션일 때만 리셋 (앱 시작 시 이미 실행 중이면 복원값 유지)
-                if !wasInitial {
-                    self.controller.usagePercent = 0
-                }
-                self.controller.sessionStart = Date()
-                self.controller.onShowRequest?()
-                // 시작 직후에는 응답 생성 중일 수 있으므로 thinking으로 시작
-                self.controller.update(to: .thinking)
-            }
-        } else {
-            // 2초 디바운스: 세션 전환 등으로 프로세스가 잠깐 사라졌다 복귀하면 숨기지 않음
-            let task = DispatchWorkItem { [weak self] in
-                guard let self, !self.isClaudeRunning() else { return }
-                DispatchQueue.main.async {
-                    self.controller.sessionStart = nil
-                }
-                self.controller.update(to: .idle)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    self.controller.onHideRequest?()
-                }
-            }
-            hideTask = task
-            queue.asyncAfter(deadline: .now() + 2.0, execute: task)
-        }
+    /// 파일이 5분 이상 변화 없으면 크래시·강제종료로 간주하여 세션 종료
+    /// 정상 종료는 AppDelegate의 프로세스 감지가 담당
+    private func checkStaleness() {
+        guard Date().timeIntervalSince(lastEventDate) > 300 else { return }
+        fireSessionEnded()
     }
 
-    /// sysctl로 커널 프로세스 목록을 직접 읽음 — 서브프로세스 없이 마이크로초 단위로 완료
-    private func isClaudeRunning() -> Bool {
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
-        var len = 0
-        guard sysctl(&mib, 4, nil, &len, nil, 0) == 0, len > 0 else { return false }
-
-        let stride = MemoryLayout<kinfo_proc>.stride
-        var procs  = [kinfo_proc](repeating: kinfo_proc(), count: len / stride + 1)
-        guard sysctl(&mib, 4, &procs, &len, nil, 0) == 0 else { return false }
-
-        let myPid = getpid()
-        let count = len / stride
-
-        for i in 0..<count {
-            let p = procs[i].kp_proc
-            guard p.p_pid > 0, p.p_pid != myPid else { continue }
-
-            // p_comm: (Int8 × 17) 튜플 → String
-            let name: String = withUnsafeBytes(of: p.p_comm) { buf in
-                let bytes = buf.prefix(while: { $0 != 0 })
-                return String(bytes: bytes, encoding: .utf8) ?? ""
-            }
-            if name == "claude" { return true }
-        }
-        return false
+    private func fireSessionEnded() {
+        stop()
+        DispatchQueue.main.async { [weak self] in self?.onSessionEnded?() }
     }
 
-    // MARK: - 파일 폴링 (도구 사용·권한 등 상세 이벤트)
+    // MARK: - 파일 폴링
 
     private func pollFile() {
-        guard let fh = FileHandle(forReadingAtPath: Self.eventFile) else { return }
+        guard let fh = FileHandle(forReadingAtPath: eventFile) else { return }
         defer { fh.closeFile() }
 
         fh.seek(toFileOffset: UInt64(fileOffset))
         let data = fh.readDataToEndOfFile()
         guard !data.isEmpty else { return }
-        fileOffset += data.count
+        fileOffset    += data.count
+        lastEventDate  = Date()
 
         let text = String(data: data, encoding: .utf8) ?? ""
         for line in text.components(separatedBy: "\n") where !line.isEmpty {
@@ -227,21 +175,27 @@ class EventMonitor {
 
         switch event.type {
         case "tool_use":
-            let toolName = formatToolName(event.tool ?? "tool")
+            let raw      = (event.tool ?? "tool").lowercased()
+            let toolName = formatToolName(raw)
+            let isRead   = ["read", "grep", "websearch", "webfetch", "glob"].contains(raw)
+            let nextState: CompanionState = isRead ? .toolRead(toolName) : .toolUse(toolName)
             if case .ready = controller.state {
-                // 새 사용자 턴 시작: 잠깐 thinking 표시 후 tool 이름으로 전환
                 controller.update(to: .thinking)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                     guard let self, case .thinking = self.controller.state else { return }
-                    self.controller.update(to: .toolUse(toolName))
+                    self.controller.update(to: nextState)
                 }
             } else {
-                controller.update(to: .toolUse(toolName))
+                controller.update(to: nextState)
             }
         case "tool_done":
-            controller.update(to: .thinking)
+            controller.update(to: .thinking)  // 도구 완료 후 항상 thinking(타이핑)으로 복귀
         case "done":
-            controller.update(to: .ready)
+            controller.update(to: .completed)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self, case .completed = self.controller.state else { return }
+                self.controller.update(to: .ready)
+            }
         case "notification":
             controller.update(to: .notification(event.message ?? "알림"), autohideAfter: 5)
         case "permission":
@@ -262,16 +216,13 @@ class EventMonitor {
         case "usage":
             if let pct = event.percent {
                 DispatchQueue.main.async {
-                    // 트랜스크립트에서 읽은 정확한 세션 시작 시각으로 업데이트
                     if let tsStr = event.sessionStartTs,
                        let tsDate = Self.parseISO8601(tsStr) {
-                        // 현재 sessionStart보다 더 이른 시각이면 교체 (더 정확)
                         if self.controller.sessionStart == nil ||
                            tsDate < self.controller.sessionStart! {
                             self.controller.sessionStart = tsDate
                         }
                     }
-                    // 컨텍스트 압축 감지: 30%p 이상 급락 시 세션 리셋
                     let prev = self.controller.usagePercent
                     if prev > 20 && pct < prev - 30 {
                         self.controller.sessionStart = Date()
@@ -299,7 +250,6 @@ class EventMonitor {
         }
     }
 
-    // "2026-04-18T13:50:58.153Z" 형식 파싱
     private static func parseISO8601(_ s: String) -> Date? {
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

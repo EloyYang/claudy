@@ -6,9 +6,11 @@ enum CompanionState: Equatable {
     case idle           // Claude 프로세스 없음 — 패널 숨김
     case ready          // 응답 완료, 입력 대기 중 — 버블 없음
     case thinking
-    case toolUse(String)
+    case toolUse(String)   // 쓰기/실행 도구 (Write, Edit, Bash 등) — 맥북 타이핑
+    case toolRead(String)  // 읽기/검색 도구 (Read, Grep, WebFetch 등) — 문서 읽기
     case notification(String)
     case permission(String)
+    case completed      // 응답 완료 알림 (잠깐 표시 후 ready로)
 }
 
 class CompanionController: ObservableObject {
@@ -16,12 +18,20 @@ class CompanionController: ObservableObject {
     @Published var usagePercent: Double = 0      // 컨텍스트 창 사용률 (내부용)
     @Published var sessionStart: Date? = nil
 
+    /// 이 세션만의 캐릭터 — 기본값은 마지막으로 저장된 캐릭터
+    @Published var character: CharacterType = {
+        if let raw  = UserDefaults.standard.string(forKey: "character.selected"),
+           let type = CharacterType(rawValue: raw) { return type }
+        return .rabbit
+    }()
+
     // 서버에서 가져온 실제 플랜 사용량
     @Published var serverUtilization: Double? = nil  // five_hour.utilization (%)
     @Published var serverResetsAt: Date? = nil        // five_hour.resets_at
     @Published var monthlyTokens: Int = 0             // 이번 달 누적 토큰 (JSONL 집계)
     @Published var isSliding: Bool = false
     @Published var alwaysApprove: Bool = false
+    @Published var memo: String = ""
     var pendingPermissionId: String? = nil
 
     var planTokenLabel: String {
@@ -46,6 +56,7 @@ class CompanionController: ObservableObject {
     var onResetPositionRequest: (() -> Void)?
     var onOpenSettingsRequest: (() -> Void)?
     var onShowStatusBarRequest: (() -> Void)?
+    var onEditMemoRequest: (() -> Void)?
 
     private var autoHideTask: DispatchWorkItem?
 

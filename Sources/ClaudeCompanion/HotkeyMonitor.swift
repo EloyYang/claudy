@@ -4,18 +4,20 @@ import AppKit
 /// Carbon RegisterEventHotKey 기반 전역 단축키 — Input Monitoring 권한 불필요
 final class HotkeyMonitor {
 
-    var onApprove: (() -> Void)?
-    var onDeny:    (() -> Void)?
-    var onHide:    (() -> Void)?
+    var onApprove:       (() -> Void)?
+    var onDeny:          (() -> Void)?
+    var onHide:          (() -> Void)?
+    var onAlwaysApprove: (() -> Void)?
 
-    private enum Slot: UInt32 { case approve = 1, deny = 2, hide = 3 }
+    private enum Slot: UInt32 { case approve = 1, deny = 2, hide = 3, alwaysApprove = 4 }
 
     private var refs:       [Slot: EventHotKeyRef] = [:]
     private var handlerRef: EventHandlerRef?
 
-    private var currentApprove:    KeyShortcut?
-    private var currentDeny:       KeyShortcut?
-    private var currentHide:       KeyShortcut?
+    private var currentApprove:       KeyShortcut?
+    private var currentDeny:          KeyShortcut?
+    private var currentHide:          KeyShortcut?
+    private var currentAlwaysApprove: KeyShortcut?
     private var inPermissionState = false
 
     init() { installHandler() }
@@ -27,10 +29,12 @@ final class HotkeyMonitor {
 
     // MARK: - Public
 
-    func updateShortcuts(approve: KeyShortcut?, deny: KeyShortcut?, hide: KeyShortcut?) {
-        currentApprove = approve
-        currentDeny    = deny
-        currentHide    = hide
+    func updateShortcuts(approve: KeyShortcut?, deny: KeyShortcut?, hide: KeyShortcut?,
+                         alwaysApprove: KeyShortcut? = nil) {
+        currentApprove       = approve
+        currentDeny          = deny
+        currentHide          = hide
+        currentAlwaysApprove = alwaysApprove
         sync()
     }
 
@@ -46,9 +50,10 @@ final class HotkeyMonitor {
     private func sync() {
         // hide: 항상 활성
         register(slot: .hide, shortcut: currentHide)
-        // approve/deny: 권한 버블이 보일 때만 활성
-        register(slot: .approve, shortcut: inPermissionState ? currentApprove : nil)
-        register(slot: .deny,    shortcut: inPermissionState ? currentDeny    : nil)
+        // approve/deny/alwaysApprove: 권한 버블이 보일 때만 활성
+        register(slot: .approve,       shortcut: inPermissionState ? currentApprove       : nil)
+        register(slot: .deny,          shortcut: inPermissionState ? currentDeny          : nil)
+        register(slot: .alwaysApprove, shortcut: inPermissionState ? currentAlwaysApprove : nil)
     }
 
     private func register(slot: Slot, shortcut: KeyShortcut?) {
@@ -103,10 +108,11 @@ final class HotkeyMonitor {
     private func fire(id: UInt32) {
         DispatchQueue.main.async {
             switch Slot(rawValue: id) {
-            case .approve: self.onApprove?()
-            case .deny:    self.onDeny?()
-            case .hide:    self.onHide?()
-            case nil:      break
+            case .approve:       self.onApprove?()
+            case .deny:          self.onDeny?()
+            case .hide:          self.onHide?()
+            case .alwaysApprove: self.onAlwaysApprove?()
+            case nil:            break
             }
         }
     }

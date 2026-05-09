@@ -55,14 +55,16 @@ struct KeyShortcut: Codable, Equatable {
 class ShortcutStore: ObservableObject {
     static let shared = ShortcutStore()
 
-    @Published var approve: KeyShortcut?
-    @Published var deny:    KeyShortcut?
-    @Published var hide:    KeyShortcut?
+    @Published var approve:       KeyShortcut?
+    @Published var deny:          KeyShortcut?
+    @Published var hide:          KeyShortcut?
+    @Published var alwaysApprove: KeyShortcut?
 
     private enum UDKey {
-        static let approve = "shortcut.approve"
-        static let deny    = "shortcut.deny"
-        static let hide    = "shortcut.hide"
+        static let approve       = "shortcut.approve"
+        static let deny          = "shortcut.deny"
+        static let hide          = "shortcut.hide"
+        static let alwaysApprove = "shortcut.alwaysApprove"
     }
 
     init() {
@@ -76,18 +78,21 @@ class ShortcutStore: ObservableObject {
 
     func save() {
         let enc = JSONEncoder()
-        UserDefaults.standard.set(try? enc.encode(approve), forKey: UDKey.approve)
-        UserDefaults.standard.set(try? enc.encode(deny),    forKey: UDKey.deny)
-        UserDefaults.standard.set(try? enc.encode(hide),    forKey: UDKey.hide)
+        UserDefaults.standard.set(try? enc.encode(approve),       forKey: UDKey.approve)
+        UserDefaults.standard.set(try? enc.encode(deny),          forKey: UDKey.deny)
+        UserDefaults.standard.set(try? enc.encode(hide),          forKey: UDKey.hide)
+        UserDefaults.standard.set(try? enc.encode(alwaysApprove), forKey: UDKey.alwaysApprove)
     }
 
     private func load() {
         let dec = JSONDecoder()
-        approve = (UserDefaults.standard.data(forKey: UDKey.approve))
+        approve       = (UserDefaults.standard.data(forKey: UDKey.approve))
             .flatMap { try? dec.decode(KeyShortcut.self, from: $0) }
-        deny    = (UserDefaults.standard.data(forKey: UDKey.deny))
+        deny          = (UserDefaults.standard.data(forKey: UDKey.deny))
             .flatMap { try? dec.decode(KeyShortcut.self, from: $0) }
-        hide    = (UserDefaults.standard.data(forKey: UDKey.hide))
+        hide          = (UserDefaults.standard.data(forKey: UDKey.hide))
+            .flatMap { try? dec.decode(KeyShortcut.self, from: $0) }
+        alwaysApprove = (UserDefaults.standard.data(forKey: UDKey.alwaysApprove))
             .flatMap { try? dec.decode(KeyShortcut.self, from: $0) }
     }
 }

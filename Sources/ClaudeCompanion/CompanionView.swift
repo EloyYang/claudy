@@ -2,13 +2,8 @@ import SwiftUI
 
 struct CompanionView: View {
     @EnvironmentObject var ctrl: CompanionController
-    @ObservedObject private var characterStore = CharacterStore.shared
 
-    // 생각 중 점 애니메이션 (1·2·3 순환)
-    @State private var dotCount = 1
-    private let dotTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
-
-    // 리셋 시간 갱신 (1분마다)
+    // 리셋 시간 갱신 (30초마다)
     @State private var resetTimeTick = Date()
     private let resetTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -20,17 +15,21 @@ struct CompanionView: View {
         return false
     }
 
+    private var isCompleted: Bool {
+        if case .completed = ctrl.state { return true }
+        return false
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            Color.clear
-                .allowsHitTesting(false)
+            Color.clear.allowsHitTesting(false)
 
             HStack(alignment: .top, spacing: 19) {
-                // 권한 요청 중: 인터랙티브 버블 / 그 외: 일반 버블
-                // allowsHitTesting을 Group 레벨에 적용해 버블이 없을 때 영역이 클릭을 막지 않도록 함
                 Group {
                     if isPermission {
                         permissionBubbleView
+                    } else if isCompleted {
+                        completionBubbleView
                     } else {
                         regularBubbleView
                     }
@@ -51,11 +50,22 @@ struct CompanionView: View {
                         .opacity(ctrl.state == .idle ? 0 : 1)
                         .animation(.easeInOut(duration: 0.3), value: ctrl.state == .idle)
                 }
+                // ── 메모 태그: 레이아웃 흐름 밖에 overlay로 캐릭터 머리 위에 고정
+                .overlay(alignment: .top) {
+                    if !ctrl.memo.isEmpty {
+                        memoTagView
+                            // bottom 기준 정렬 → 메모 하단이 캐릭터 상단에 맞닿도록
+                            .alignmentGuide(.top) { d in d[.bottom] }
+                            .transition(.asymmetric(
+                                insertion: .scale(scale: 0.8, anchor: .bottom).combined(with: .opacity),
+                                removal:   .scale(scale: 0.8, anchor: .bottom).combined(with: .opacity)
+                            ))
+                    }
+                }
+                .animation(.spring(response: 0.35, dampingFraction: 0.70), value: ctrl.memo.isEmpty)
                 .padding(.trailing, 6)
                 .contentShape(Rectangle())
-                .onTapGesture(count: 2) {
-                    ctrl.onOpenClaudeRequest?()
-                }
+                .onTapGesture(count: 2) { ctrl.onOpenClaudeRequest?() }
                 .gesture(
                     DragGesture(minimumDistance: 4, coordinateSpace: .global)
                         .onChanged { value in
@@ -79,9 +89,11 @@ struct CompanionView: View {
                     Menu("캐릭터 변경") {
                         ForEach(CharacterType.allCases, id: \.self) { type in
                             Button {
-                                characterStore.selected = type
+                                ctrl.character = type
+                                // 새 세션의 기본값으로도 저장
+                                UserDefaults.standard.set(type.rawValue, forKey: "character.selected")
                             } label: {
-                                if characterStore.selected == type {
+                                if ctrl.character == type {
                                     Label(type.displayName, systemImage: "checkmark")
                                 } else {
                                     Text(type.displayName)
@@ -89,6 +101,16 @@ struct CompanionView: View {
                             }
                         }
                     }
+                    Divider()
+                    Button(ctrl.memo.isEmpty ? "메모 추가..." : "메모 편집...") {
+                        ctrl.onEditMemoRequest?()
+                    }
+                    if !ctrl.memo.isEmpty {
+                        Button("메모 지우기") {
+                            ctrl.memo = ""
+                        }
+                    }
+                    Divider()
                     Button("단축키 설정...") { ctrl.onOpenSettingsRequest?() }
                     Divider()
                     Button("위치 초기화") { ctrl.onResetPositionRequest?() }
@@ -98,20 +120,13 @@ struct CompanionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.spring(response: 0.4, dampingFraction: 0.75), value: bubbleMessage)
-        .onReceive(dotTimer) { _ in
-            guard case .thinking = ctrl.state else { return }
-            dotCount = dotCount % 3 + 1
-        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.75), value: isCompleted)
         .onReceive(resetTimer) { t in resetTimeTick = t }
-        .onChange(of: ctrl.state) { newState in
-            if case .thinking = newState { dotCount = 1 }
-        }
     }
 
-    // MARK: - 리셋 시간 계산 (서버 resets_at 우선, 없으면 sessionStart+5h)
+    // MARK: - 리셋 시간 계산
 
     private func resetTimeString(from now: Date) -> String {
-        // 서버에서 받은 resets_at 우선
         let resetAt: Date
         if let serverReset = ctrl.serverResetsAt {
             resetAt = serverReset
@@ -124,26 +139,55 @@ struct CompanionView: View {
         guard diff > 0 else { return "" }
         let h = diff / 3600
         let m = (diff % 3600) / 60
-        if h > 0 {
-            return String(format: "%d:%02d", h, m)
-        } else {
-            return String(format: "%dm", m)
-        }
+        return h > 0 ? String(format: "%d:%02d", h, m) : String(format: "%dm", m)
     }
 
     // MARK: - 캐릭터 선택
 
     @ViewBuilder
     private var characterView: some View {
-        switch characterStore.selected {
-        case .rabbit:
-            RabbitCharacterView()
-        case .brownRabbit:
-            BrownRabbitCharacterView()
+        switch ctrl.character {
+        case .rabbit:        RabbitCharacterView()
+        case .brownRabbit:   BrownRabbitCharacterView()
+        case .pinkRabbit:    PinkRabbitCharacterView()
+        case .orangeRabbit:  OrangeRabbitCharacterView()
+        case .yellowRabbit:  YellowRabbitCharacterView()
+        case .greenRabbit:   GreenRabbitCharacterView()
         }
     }
 
-    // MARK: - 권한 요청 버블 (버튼 포함)
+    // MARK: - 완료 버블 (권한 요청과 동일한 스타일)
+
+    @ViewBuilder
+    private var completionBubbleView: some View {
+        ZStack(alignment: .trailing) {
+            Text("완료됐어요!")
+                .font(.system(.callout, design: .monospaced))
+                .fontWeight(.bold)
+                .foregroundColor(.black)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.20), radius: 8, x: -2, y: 3)
+            )
+
+            SpeechTail()
+                .fill(Color.white)
+                .frame(width: 16, height: 13)
+                .offset(x: 14, y: 0)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .transition(
+            .asymmetric(
+                insertion: .scale(scale: 0.8, anchor: .topTrailing).combined(with: .opacity),
+                removal:   .opacity
+            )
+        )
+    }
+
+    // MARK: - 권한 요청 버블
 
     @ViewBuilder
     private var permissionBubbleView: some View {
@@ -165,14 +209,27 @@ struct CompanionView: View {
         }
     }
 
+    // MARK: - 메모 태그 (캐릭터 머리 위)
+
+    private var memoTagView: some View {
+        Text(ctrl.memo)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .foregroundColor(.white)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: 66)
+            .shadow(color: .black.opacity(0.60), radius: 2, x: 0, y: 1)
+    }
+
     // MARK: - 일반 말풍선
 
     private var bubbleMessage: String? {
         switch ctrl.state {
-        case .thinking:              return "코드짜는중" + String(repeating: ".", count: dotCount)
+        case .thinking:              return "코딩중"
         case .toolUse(let name):     return name
+        case .toolRead(let name):    return name
         case .notification(let msg): return msg
-        case .permission:            return nil   // permissionBubbleView가 담당
+        case .permission, .completed: return nil
         case .idle, .ready:          return nil
         }
     }

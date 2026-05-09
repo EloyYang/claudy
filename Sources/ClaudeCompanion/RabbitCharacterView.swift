@@ -10,7 +10,6 @@ struct RabbitCharacterView: View {
     private let earPink   = Color(red: 0.95, green: 0.72, blue: 0.78)
     private let carrotCol = Color(red: 0.96, green: 0.55, blue: 0.18)
     private let leafCol   = Color(red: 0.28, green: 0.70, blue: 0.28)
-    private let needleCol = Color(red: 0.52, green: 0.33, blue: 0.13)
 
     @State private var bodyDY:        CGFloat = 0
     @State private var bodyDX:        CGFloat = 0
@@ -26,6 +25,11 @@ struct RabbitCharacterView: View {
     @State private var blinking:      Bool    = false
     @State private var wideEyes:      Bool    = false
     @State private var eyeLookUp:     Bool    = false
+    @State private var showReading:   Bool    = false
+    @State private var readingPhase:  Bool    = false
+    @State private var throwingDoc:  Bool    = false
+    @State private var docVisible:   Bool    = true
+    @State private var readingStep:  Int     = 0
 
     var body: some View {
         ZStack {
@@ -69,50 +73,18 @@ struct RabbitCharacterView: View {
                 .animation(.easeInOut(duration: 0.32), value: rightArmDX)
                 .animation(.easeInOut(duration: 0.28), value: rightArmDY)
 
+            // ── 맥북 타이핑 (생각중 — 팔 위에 그려서 팔이 맥북에 가려짐)
+            if showKnitting {
+                LaptopView(p: p, bodyDY: bodyDY)
+                    .transition(.opacity)
+            }
+
             // ── 발
             px(w: 1.5, h: 0.9, c: bodyColor).offset(x: -p * 1.2, y: p * 2.9 + bodyDY)
             px(w: 1.5, h: 0.9, c: bodyColor).offset(x:  p * 1.2, y: p * 2.9 + bodyDY)
-
-            // ── 뜨개질: 실뭉치 + 실 + 당근 + 바늘 (바늘은 팔과 독립적으로 배치)
-            if showKnitting {
-                // 실뭉치 (발 옆 바닥)
-                yarnBallView
-                    .offset(x: -p * 1.6, y: p * 3.15 + bodyDY)
-                    .transition(.opacity)
-
-                // 실 (실뭉치 → 당근): Shape 기반으로 ZStack 전체 프레임을 받아 중심 기준 좌표 사용
-                YarnThreadShape(p: p)
-                    .stroke(carrotCol.opacity(0.85), lineWidth: 1.0)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .allowsHitTesting(false)
-                    .offset(y: bodyDY)
-                    .transition(.opacity)
-
-                // 당근 작업물 (고정)
-                knittingWorkView
-                    .offset(y: bodyDY)
-                    .transition(.opacity)
-
-                // 왼쪽 바늘 — 왼팔의 DX/DY를 그대로 따라감
-                Rectangle()
-                    .fill(needleCol)
-                    .frame(width: p * 2.4, height: p * 0.27)
-                    .rotationEffect(.degrees(24))
-                    .offset(x: -p * 1.45 + leftArmDX,
-                            y:  p * 1.3  + leftArmDY + bodyDY)
-                    .animation(.easeInOut(duration: 0.28), value: leftArmDY)
-                    .animation(.easeInOut(duration: 0.32), value: leftArmDX)
-                    .transition(.opacity)
-
-                // 오른쪽 바늘 — 오른팔의 DX/DY를 그대로 따라감
-                Rectangle()
-                    .fill(needleCol)
-                    .frame(width: p * 2.4, height: p * 0.27)
-                    .rotationEffect(.degrees(-24))
-                    .offset(x:  p * 1.45 + rightArmDX,
-                            y:  p * 1.3  + rightArmDY + bodyDY)
-                    .animation(.easeInOut(duration: 0.28), value: rightArmDY)
-                    .animation(.easeInOut(duration: 0.32), value: rightArmDX)
+            // ── 문서 읽기 (툴사용)
+            if showReading {
+                DocumentView(p: p, bodyDY: bodyDY, throwing: throwingDoc, docVisible: docVisible)
                     .transition(.opacity)
             }
 
@@ -168,53 +140,6 @@ struct RabbitCharacterView: View {
         }
     }
 
-    // MARK: – 뜨개질 작업물 (당근만, 바늘은 main ZStack에서 팔과 함께 관리)
-
-    @ViewBuilder
-    private var knittingWorkView: some View {
-        ZStack {
-            // 당근 잎
-            px(w: 0.65, h: 0.55, c: leafCol).offset(x: -p * 0.35, y: p * 1.15)
-            px(w: 0.65, h: 0.55, c: leafCol).offset(x:  p * 0.35, y: p * 1.15)
-            px(w: 1.1,  h: 0.5,  c: leafCol).offset(y: p * 1.5)
-
-            // 당근 몸통 (바늘 아래로 매달린 형태)
-            px(w: 1.3, h: 1.1, c: carrotCol).offset(y: p * 2.1)
-        }
-    }
-
-    // MARK: – 실뭉치 뷰
-
-    private let yarnDark = Color(red: 0.82, green: 0.40, blue: 0.08)
-
-    private var yarnBallView: some View {
-        ZStack {
-            // 몸통 원
-            Circle()
-                .fill(carrotCol)
-                .frame(width: p * 1.7, height: p * 1.7)
-            // 감긴 실 — 다양한 각도의 타원으로 실감나게
-            ForEach([0.0, 40.0, 80.0, 130.0, 165.0, -40.0, -80.0], id: \.self) { angle in
-                Ellipse()
-                    .stroke(yarnDark.opacity(0.55), lineWidth: p * 0.15)
-                    .frame(width: p * 1.45, height: p * 0.55)
-                    .rotationEffect(.degrees(angle))
-                    .clipShape(Circle().scale(0.92))
-            }
-            // 하이라이트
-            Circle()
-                .fill(Color.white.opacity(0.28))
-                .frame(width: p * 0.48, height: p * 0.48)
-                .offset(x: -p * 0.32, y: -p * 0.28)
-            // 픽셀아트 테두리
-            Circle()
-                .stroke(Color.black.opacity(0.20), lineWidth: 0.8)
-                .frame(width: p * 1.7, height: p * 1.7)
-        }
-    }
-
-    // MARK: – 실 연결선 Shape (ZStack 프레임 전체를 받아 중심 기준으로 그림)
-
     // MARK: – 픽셀 블록 / 눈
 
     private func px(w: CGFloat, h: CGFloat, c: Color) -> some View {
@@ -250,10 +175,14 @@ struct RabbitCharacterView: View {
             }
         }
 
-        // 뜨개질 상태가 아니면 중지
+        // 타이핑/읽기 중지
         switch state {
         case .thinking, .toolUse: break
         default: stopKnitting()
+        }
+        switch state {
+        case .toolRead: break
+        default: stopReading()
         }
 
         if !ctrl.isSliding {
@@ -268,6 +197,8 @@ struct RabbitCharacterView: View {
 
         case .thinking, .toolUse:
             startKnitting()
+        case .toolRead:
+            startReading()
 
         case .notification:
             withAnimation(.easeOut(duration: 0.12)) { bodyDY = -p * 2 }
@@ -278,6 +209,20 @@ struct RabbitCharacterView: View {
         case .permission:
             withAnimation(.easeInOut(duration: 0.18)) { wideEyes = true }
             withAnimation(.easeOut(duration: 0.28)) { leftArmDY = -p * 2.8 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.65)) {
+                    showCarrot = true
+                }
+            }
+
+        case .completed:
+            // 완료: 권한 요청과 동일한 모션 (눈 크게 + 팔 올리기 + 작은 점프)
+            withAnimation(.easeInOut(duration: 0.18)) { wideEyes = true }
+            withAnimation(.easeOut(duration: 0.28)) { leftArmDY = -p * 2.8 }
+            withAnimation(.easeOut(duration: 0.12)) { bodyDY = -p * 2 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.55)) { bodyDY = 0 }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.65)) {
                     showCarrot = true
@@ -295,13 +240,12 @@ struct RabbitCharacterView: View {
     // MARK: – 뜨개질 애니메이션
 
     private func startKnitting() {
-        guard !showKnitting else { return }  // 이미 뜨개질 중이면 중복 시작 방지
+        guard !showKnitting else { return }
         withAnimation(.easeOut(duration: 0.32)) {
-            // 팔을 안쪽으로 모으고 살짝 올리기
-            leftArmDX    =  p * 1.4
-            rightArmDX   = -p * 1.4
-            leftArmDY    = -p * 0.45
-            rightArmDY   = -p * 0.45
+            leftArmDX    =  p * 1.55
+            rightArmDX   = -p * 1.55
+            leftArmDY    =  p * 1.00
+            rightArmDY   =  p * 1.00
             showKnitting = true
         }
         knittingPhase = false
@@ -309,37 +253,102 @@ struct RabbitCharacterView: View {
     }
 
     private func stepKnitting() {
-        // 뜨개질 상태가 아니면 자동 중지
-        switch ctrl.state {
-        case .thinking, .toolUse: break
-        default: return
-        }
-
+        switch ctrl.state { case .thinking, .toolUse: break; default: return }
         knittingPhase.toggle()
-        let base:  CGFloat = -p * 0.55
-        let swing: CGFloat =  p * 0.38
-
+        let base:  CGFloat = p * 1.00
+        let swing: CGFloat = p * 0.60
         withAnimation(.easeInOut(duration: 0.32)) {
             leftArmDY  = knittingPhase ? base - swing : base + swing
             rightArmDY = knittingPhase ? base + swing : base - swing
         }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
-            stepKnitting()
-        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) { stepKnitting() }
     }
 
     private func stopKnitting() {
         withAnimation(.easeOut(duration: 0.25)) {
             showKnitting = false
-            rightArmDY   = 0
-            rightArmDX   = 0
-            leftArmDX    = 0
+            if !showReading { rightArmDY = 0; rightArmDX = 0; leftArmDX = 0 }
         }
         // permission 상태가 아닐 때만 왼팔도 내리기
-        if case .permission = ctrl.state { } else {
-            withAnimation(.easeOut(duration: 0.25)) { leftArmDY = 0 }
+        if !showReading {
+            if case .permission = ctrl.state { } else {
+                withAnimation(.easeOut(duration: 0.25)) { leftArmDY = 0 }
+            }
         }
+    }
+
+    // MARK: – 문서 읽기
+
+    private func startReading() {
+        guard !showReading else { return }
+        withAnimation(.easeOut(duration: 0.38)) {
+            leftArmDX  =  p * 1.55; rightArmDX  = -p * 1.55
+            leftArmDY  =  p * 0.25; rightArmDY  =  p * 0.25
+            showReading = true
+        }
+        readingPhase = false
+        readingStep  = 0
+        stepReading()
+    }
+
+    private func stepReading() {
+        guard case .toolRead = ctrl.state else { return }
+        readingStep += 1
+        if readingStep % 3 == 0 {
+            throwAndReplaceDoc()
+        } else {
+            readingPhase.toggle()
+            withAnimation(.easeInOut(duration: 1.2)) {
+                leftArmDY  = readingPhase ? p * 0.18 : p * 0.30
+                rightArmDY = readingPhase ? p * 0.30 : p * 0.18
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { self.stepReading() }
+        }
+    }
+
+    private func throwAndReplaceDoc() {
+        guard case .toolRead = ctrl.state else { return }
+        // 팔을 위로 들며 서류 던지기 + 문서 동시에 fade-out
+        withAnimation(.easeOut(duration: 0.18)) {
+            leftArmDY  = -p * 0.30
+            rightArmDY = -p * 0.30
+            leftArmDX  =  p * 1.80
+            rightArmDX = -p * 1.80
+        }
+        throwingDoc = true   // offset만 easeOut으로 날아감
+        docVisible  = false  // 동시에 fade-out
+        // 날아간 후: offset 즉시 스냅 (throwing=false, animation=nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+            guard case .toolRead = self.ctrl.state else { return }
+            self.throwingDoc = false  // 즉시 원위치로 스냅 (애니메이션 없음)
+        }
+        // 짧은 갭 후 새 문서 fade-in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.33) {
+            guard case .toolRead = self.ctrl.state else { return }
+            self.docVisible = true
+            withAnimation(.easeOut(duration: 0.28)) {
+                self.leftArmDY  =  self.p * 0.25
+                self.rightArmDY =  self.p * 0.25
+                self.leftArmDX  =  self.p * 1.55
+                self.rightArmDX = -self.p * 1.55
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.40) { self.stepReading() }
+        }
+    }
+
+    private func stopReading() {
+        withAnimation(.easeOut(duration: 0.25)) {
+            showReading = false
+            throwingDoc = false
+            docVisible  = true
+            if !showKnitting { rightArmDY = 0; rightArmDX = 0; leftArmDX = 0 }
+        }
+        if !showKnitting {
+            if case .permission = ctrl.state { } else {
+                withAnimation(.easeOut(duration: 0.25)) { leftArmDY = 0 }
+            }
+        }
+        readingStep  = 0
     }
 
     // MARK: – 아이들 애니메이션
@@ -414,19 +423,3 @@ struct RabbitCharacterView: View {
     }
 }
 
-// MARK: - 실 연결선
-// rect.midX/midY를 캐릭터 중심으로 삼아, 다른 뷰의 offset 좌표계와 일치하게 그린다.
-struct YarnThreadShape: Shape {
-    let p: CGFloat
-    func path(in rect: CGRect) -> Path {
-        let cx = rect.midX
-        let cy = rect.midY
-        var path = Path()
-        path.move(to: CGPoint(x: cx - p * 1.6, y: cy + p * 2.3))   // 실뭉치 상단
-        path.addQuadCurve(
-            to:      CGPoint(x: cx,           y: cy + p * 2.65),    // 당근 하단 근처
-            control: CGPoint(x: cx - p * 0.7, y: cy + p * 2.85)    // 자연스러운 처짐
-        )
-        return path
-    }
-}

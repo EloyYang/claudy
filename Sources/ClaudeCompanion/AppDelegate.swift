@@ -2,38 +2,259 @@ import Cocoa
 import SwiftUI
 import Combine
 import ServiceManagement
+import Darwin
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    private var overlayPanel: NSPanel?
     private var statusItem: NSStatusItem?
-    private let controller = CompanionController()
-    private var eventMonitor: EventMonitor?
     private let hotkeyMonitor = HotkeyMonitor()
     private var settingsWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
+    private var availableUpdate: String? = nil
 
-    private let panelWidth: CGFloat  = 320
-    private let panelHeight: CGFloat = 200
+    // ── 다중 세션 관리
+    private var sessions:          [String: SessionWindow] = [:]
+    private var slotOwner:         [Int: String] = [:]          // slot → sessionId
+    private var sessionOrder:      [String] = []               // 생성 순서 (최신이 앞)
+    private var ignoredSessionIds: Set<String> = []            // 종료된 세션 재탐지 방지
+    private let appStartTime       = Date()                     // 비초기 스캔 기준 시각
+    private var scanTimer:         DispatchSourceTimer?
+    private let scanQueue = DispatchQueue(label: "buni.session.scanner", qos: .background)
+    private var claudeWasRunning = false
+    private var isInitialScan    = true
 
-    // 사용자가 지정한 패널 위치 (nil이면 기본 오른쪽 상단)
-    private var customPanelOrigin: NSPoint?
-    private var dragEventMonitor: Any?
-    private var globalMouseMonitor: Any?
-    private var lastMouseLocation: NSPoint = .zero
-    private var isDragging: Bool = false
-    private var availableUpdate: String? = nil   // 새 버전이 있으면 "1.x.x"
+    // ── 위치 영속성 (슬롯 0 전용)
+    private var savedOrigin: NSPoint? {
+        get {
+            guard UserDefaults.standard.object(forKey: "panel.x") != nil else { return nil }
+            return NSPoint(x: UserDefaults.standard.double(forKey: "panel.x"),
+                           y: UserDefaults.standard.double(forKey: "panel.y"))
+        }
+        set {
+            if let p = newValue, p.x >= 0 {
+                UserDefaults.standard.set(Double(p.x), forKey: "panel.x")
+                UserDefaults.standard.set(Double(p.y), forKey: "panel.y")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "panel.x")
+                UserDefaults.standard.removeObject(forKey: "panel.y")
+            }
+        }
+    }
+
+    // MARK: - Launch
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        customPanelOrigin = loadSavedOrigin()
-        setupOverlayPanel()
         if !UserDefaults.standard.bool(forKey: "statusBar.hidden") {
             setupStatusBar()
         }
-        setupControllerCallbacks()
-        startEventMonitor()
         setupHotkeyMonitor()
         setupSettingsCallbacks()
         setupUpdateChecker()
+        startSessionScanner()
+    }
+
+    // MARK: - Session Scanner
+
+    private func startSessionScanner() {
+        let t = DispatchSource.makeTimerSource(queue: scanQueue)
+        t.schedule(deadline: .now(), repeating: .milliseconds(500))
+        t.setEventHandler { [weak self] in self?.scanForSessions() }
+        t.resume()
+        scanTimer = t
+    }
+
+    private func scanForSessions() {
+        let claudeRunning = isClaudeRunning()
+        let wasInitial    = isInitialScan
+        isInitialScan     = false
+
+        // ── Claude 종료 감지: 실행 중이던 Claude가 꺼졌으면 모든 세션 종료 + 무시 목록 초기화
+        if claudeWasRunning && !claudeRunning {
+            let ids = Array(sessions.keys)
+            if !ids.isEmpty {
+                DispatchQueue.main.async {
+                    ids.forEach { self.removeSession(id: $0) }
+                    self.ignoredSessionIds.removeAll()  // 재시작 때 새 세션 탐지 허용
+                }
+            }
+        }
+        claudeWasRunning = claudeRunning
+
+        guard claudeRunning else { return }
+
+        // ── 세션 파일 스캔
+        let tmp = URL(fileURLWithPath: "/tmp")
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: tmp,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else {
+            // 파일 스캔 실패해도 Claude 실행 중이면 레거시 세션 보장
+            DispatchQueue.main.async { self.ensureLegacySession() }
+            return
+        }
+
+        var found: [String: URL] = [:]
+        for url in files {
+            let name = url.lastPathComponent
+            if name.hasPrefix("claude-companion-events-") && name.hasSuffix(".jsonl") {
+                let id = String(name.dropFirst("claude-companion-events-".count).dropLast(".jsonl".count))
+                if !id.isEmpty { found[id] = url }
+            }
+        }
+
+        let now = Date()
+        var hasRecentSession = false
+
+        for (sid, url) in found {
+            guard sessions[sid] == nil else { hasRecentSession = true; continue }
+            guard !ignoredSessionIds.contains(sid) else { continue }  // 종료된 세션 재생성 방지
+            if let modDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
+                // 앱 시작 시 : 90초 이내 수정된 파일만 복원
+                // 이후 스캔   : 앱 시작 이후에 수정된 파일만 신규 세션으로 인식
+                //              (오래된 잔존 파일이 나중에 탐지되는 것을 방지)
+                let threshold: TimeInterval = wasInitial
+                    ? 90
+                    : now.timeIntervalSince(appStartTime) + 10  // 앱 시작 10초 전까지 허용
+                if now.timeIntervalSince(modDate) < threshold {
+                    hasRecentSession = true
+                    DispatchQueue.main.async { self.addSession(id: sid, fileURL: url) }
+                }
+            }
+        }
+
+        // ── 세션 파일이 없으면 레거시 단일 파일로 폴백
+        if !hasRecentSession && sessions.isEmpty {
+            DispatchQueue.main.async { self.ensureLegacySession() }
+        }
+    }
+
+    /// Claude가 실행 중이지만 세션 파일이 없을 때 레거시 이벤트 파일로 단일 세션 보장
+    private func ensureLegacySession() {
+        guard sessions["__legacy__"] == nil else { return }
+        let legacyURL = URL(fileURLWithPath: EventMonitor.legacyEventFile)
+        if !FileManager.default.fileExists(atPath: legacyURL.path) {
+            FileManager.default.createFile(atPath: legacyURL.path, contents: nil)
+        }
+        addSession(id: "__legacy__", fileURL: legacyURL)
+    }
+
+    // MARK: - Process detection (sysctl, 서브프로세스 없이 마이크로초 완료)
+
+    private func isClaudeRunning() -> Bool {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var len = 0
+        guard sysctl(&mib, 4, nil, &len, nil, 0) == 0, len > 0 else { return false }
+        let stride = MemoryLayout<kinfo_proc>.stride
+        var procs  = [kinfo_proc](repeating: kinfo_proc(), count: len / stride + 1)
+        guard sysctl(&mib, 4, &procs, &len, nil, 0) == 0 else { return false }
+        let myPid = getpid()
+        for i in 0..<(len / stride) {
+            let p = procs[i].kp_proc
+            guard p.p_pid > 0, p.p_pid != myPid else { continue }
+            let name = withUnsafeBytes(of: p.p_comm) { buf in
+                String(bytes: buf.prefix(while: { $0 != 0 }), encoding: .utf8) ?? ""
+            }
+            if name == "claude" { return true }
+        }
+        return false
+    }
+
+    private func addSession(id: String, fileURL: URL) {
+        guard sessions[id] == nil else { return }
+
+        // 실제 Claude 세션이 추가될 때 레거시 대기 세션 교체
+        // (레거시는 항상 1개 보장용이므로 실제 세션이 생기면 불필요)
+        if id != "__legacy__" {
+            dismissLegacySession()
+        }
+
+        // 이 세션에 저장된 캐릭터가 없으면 현재 활성 세션들과 겹치지 않는 캐릭터 배정
+        if UserDefaults.standard.string(forKey: "character.session.\(id)") == nil {
+            let assigned = pickCharacter(for: id)
+            UserDefaults.standard.set(assigned.rawValue, forKey: "character.session.\(id)")
+        }
+
+        let slot = nextAvailableSlot()
+        let origin = slot == 0 ? savedOrigin : nil
+        let win = SessionWindow(sessionId: id, slot: slot,
+                                eventFile: fileURL.path,
+                                savedOrigin: origin)
+        wire(win)
+        sessions[id] = win
+        slotOwner[slot] = id
+        sessionOrder.insert(id, at: 0)
+        win.setup()
+        rebuildMenu()
+        syncHotkeyPermissionState()
+    }
+
+    /// 레거시 대기 세션을 조용히 제거 (ignoredSessionIds에 추가하지 않아 재생성 가능)
+    private func dismissLegacySession() {
+        guard let win = sessions["__legacy__"] else { return }
+        win.teardown()
+        slotOwner.removeValue(forKey: win.slot)
+        sessions.removeValue(forKey: "__legacy__")
+        sessionOrder.removeAll { $0 == "__legacy__" }
+    }
+
+    /// 현재 활성 세션이 사용하지 않는 캐릭터를 순서대로 선택
+    private func pickCharacter(for sessionId: String) -> CharacterType {
+        let inUse = Set(sessions.values.map { $0.controller.character })
+        let all   = CharacterType.allCases
+        // 사용 안 된 캐릭터 중 첫 번째 선택
+        if let available = all.first(where: { !inUse.contains($0) }) {
+            return available
+        }
+        // 6개 모두 사용 중이면 슬롯 번호 기반 순환
+        return all[nextAvailableSlot() % all.count]
+    }
+
+    private func removeSession(id: String) {
+        ignoredSessionIds.insert(id)   // 종료된 세션 파일 재탐지 방지
+        guard let win = sessions[id] else { return }
+        win.teardown()
+        slotOwner.removeValue(forKey: win.slot)
+        sessions.removeValue(forKey: id)
+        sessionOrder.removeAll { $0 == id }
+        rebuildMenu()
+        syncHotkeyPermissionState()
+    }
+
+    private func wire(_ win: SessionWindow) {
+        win.onOpenClaude    = { [weak self] in self?.openClaude() }
+        win.onOpenSettings  = { [weak self] in self?.openSettings() }
+        win.onShowStatusBar = { [weak self] in self?.showStatusBar() }
+        win.onRebuildMenu   = { [weak self] in self?.rebuildMenu() }
+        win.onSessionEnded  = { [weak self] in
+            DispatchQueue.main.async { self?.removeSession(id: win.sessionId) }
+        }
+        win.onSaveOrigin = { [weak self] origin in
+            guard win.slot == 0 else { return }
+            self?.savedOrigin = origin
+        }
+    }
+
+    private func nextAvailableSlot() -> Int {
+        var s = 0
+        while slotOwner[s] != nil { s += 1 }
+        return s
+    }
+
+    // MARK: - Active session (단축키 등 라우팅 기준)
+
+    private var activeSession: SessionWindow? {
+        // 권한 버블이 떠 있는 세션 우선, 없으면 가장 최근 세션
+        for id in sessionOrder {
+            if let win = sessions[id],
+               case .permission = win.controller.state { return win }
+        }
+        return sessionOrder.first.flatMap { sessions[$0] }
+    }
+
+    private func syncHotkeyPermissionState() {
+        let anyPermission = sessions.values.contains {
+            if case .permission = $0.controller.state { return true }; return false
+        }
+        hotkeyMonitor.updatePermissionState(anyPermission)
     }
 
     // MARK: - Status bar
@@ -43,7 +264,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem?.button {
             button.title = ""
             let icon = MenuBarIcon.make(size: 18)
-            icon.isTemplate = true   // 다크/라이트 모드 자동 대응
+            icon.isTemplate = true
             button.image = icon
             button.imageScaling = .scaleProportionallyDown
         }
@@ -51,54 +272,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuildMenu() {
+        syncHotkeyPermissionState()
         let menu = NSMenu()
 
-        // 새 버전 알림
         if let ver = availableUpdate {
             let item = NSMenuItem(title: "🆕 업데이트 v\(ver) — 다운로드",
-                                  action: #selector(downloadUpdate),
-                                  keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-            menu.addItem(.separator())
+                                  action: #selector(downloadUpdate), keyEquivalent: "")
+            item.target = self; menu.addItem(item); menu.addItem(.separator())
         }
 
-        // 전체 허용 모드 활성 시 상태 표시 + 해제 버튼
-        if controller.alwaysApprove {
+        // 전체 허용 모드 상태 표시
+        let anyAlwaysApprove = sessions.values.contains { $0.controller.alwaysApprove }
+        if anyAlwaysApprove {
             let item = NSMenuItem(title: "⚡ 전체 허용 모드 켜짐 — 클릭하여 끄기",
-                                  action: #selector(disableAlwaysApprove),
-                                  keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-            menu.addItem(.separator())
+                                  action: #selector(disableAlwaysApprove), keyEquivalent: "")
+            item.target = self; menu.addItem(item); menu.addItem(.separator())
         }
 
-        let isVisible = overlayPanel?.isVisible ?? false
-        menu.addItem(NSMenuItem(title: isVisible ? "부니 숨기기" : "부니 보이기",
-                                action: #selector(toggleVisibility),
-                                keyEquivalent: "h"))
+        let anyVisible = sessions.values.contains { $0.panel?.isVisible == true }
+        menu.addItem(NSMenuItem(title: anyVisible ? "부니 숨기기" : "부니 부르기",
+                                action: #selector(toggleVisibility), keyEquivalent: "h"))
         menu.addItem(NSMenuItem(title: "Claude 열기",
-                                action: #selector(openClaude),
-                                keyEquivalent: "o"))
+                                action: #selector(openClaude), keyEquivalent: "o"))
         menu.addItem(NSMenuItem(title: "위치 초기화",
-                                action: #selector(resetPosition),
-                                keyEquivalent: ""))
+                                action: #selector(resetPosition), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "단축키 설정...",
-                                action: #selector(openSettings),
-                                keyEquivalent: ","))
+                                action: #selector(openSettings), keyEquivalent: ","))
 
         let loginItem = NSMenuItem(title: "부팅 시 자동 실행",
-                                   action: #selector(toggleLaunchAtLogin),
-                                   keyEquivalent: "")
+                                   action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.state = isLaunchAtLoginEnabled ? .on : .off
         menu.addItem(loginItem)
 
         menu.addItem(NSMenuItem(title: "메뉴바 아이콘 숨기기",
-                                action: #selector(hideStatusBar),
-                                keyEquivalent: ""))
+                                action: #selector(hideStatusBar), keyEquivalent: ""))
         menu.addItem(.separator())
 
-        // 현재 버전 표시 (비활성)
         let verItem = NSMenuItem(title: "Buni v\(UpdateChecker.currentVersion)",
                                  action: nil, keyEquivalent: "")
         verItem.isEnabled = false
@@ -113,9 +322,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
 
-    @objc private func downloadUpdate() {
-        UpdateChecker.openReleasePage()
-    }
+    @objc private func downloadUpdate() { UpdateChecker.openReleasePage() }
 
     @objc private func hideStatusBar() {
         NSStatusBar.system.removeStatusItem(statusItem!)
@@ -129,107 +336,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(false, forKey: "statusBar.hidden")
     }
 
-    private func setupUpdateChecker() {
-        UpdateChecker.shared.onUpdateFound = { [weak self] ver in
-            guard let self else { return }
-            // 이미 같은 버전이면 스킵
-            if self.availableUpdate == ver { return }
-            self.availableUpdate = ver
-            self.rebuildMenu()
-            // 캐릭터 말풍선 알림 (5초 표시)
-            self.controller.update(to: .notification("🆕 Buni v\(ver) 업데이트"), autohideAfter: 8)
-        }
-        UpdateChecker.shared.startPeriodicCheck()
-    }
-
     @objc private func disableAlwaysApprove() {
-        controller.alwaysApprove = false
+        sessions.values.forEach { $0.controller.alwaysApprove = false }
     }
 
     @objc func toggleVisibility() {
-        if overlayPanel?.isVisible == true {
-            hideCompanion()
+        let anyVisible = sessions.values.contains { $0.panel?.isVisible == true }
+        if anyVisible {
+            sessions.values.forEach { $0.hideCompanion() }
         } else {
-            showCompanion()
+            sessions.values.forEach { $0.showCompanion() }
         }
-    }
-
-    func hideCompanion() {
-        guard let panel = overlayPanel, let screen = NSScreen.main else {
-            overlayPanel?.orderOut(nil); rebuildMenu(); return
-        }
-        guard panel.isVisible, !controller.isSliding else {
-            panel.orderOut(nil); rebuildMenu(); return
-        }
-
-        controller.isSliding = true
-        // 현재 Y를 그대로 유지하고 X만 화면 밖으로 → 수평 슬라이드만
-        let currentY = panel.frame.origin.y
-        let exitFrame = NSRect(x: screen.visibleFrame.maxX,
-                               y: currentY,
-                               width: panelWidth, height: panelHeight)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.55
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            panel.animator().setFrame(exitFrame, display: true)
-        } completionHandler: {
-            panel.orderOut(nil)
-            self.controller.isSliding = false
-            self.rebuildMenu()
-        }
-    }
-
-    func showCompanion() {
-        guard let screen = NSScreen.main else { return }
-        guard overlayPanel?.isVisible != true, !controller.isSliding else { return }
-
-        let startFrame  = offScreenRightFrame(screen: screen)
-        let targetFrame = activeFrame(screen: screen)
-
-        overlayPanel?.setFrame(startFrame, display: false)
-        overlayPanel?.orderFrontRegardless()
-
-        controller.isSliding = true
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.85
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            overlayPanel?.animator().setFrame(targetFrame, display: true)
-        } completionHandler: {
-            self.controller.isSliding = false
-            self.updateMousePassthrough()   // 표시 완료 후 위치 재평가
-        }
-        rebuildMenu()
-    }
-
-    private func offScreenRightFrame(screen: NSScreen) -> NSRect {
-        let originY = customPanelOrigin?.y ?? (screen.visibleFrame.maxY - panelHeight)
-        return NSRect(x: screen.visibleFrame.maxX,
-                      y: originY,
-                      width: panelWidth, height: panelHeight)
-    }
-
-    @objc func resetPosition() {
-        controller.onResetPositionRequest?()
-    }
-
-    // MARK: - 부팅 시 자동 실행
-
-    private var isLaunchAtLoginEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
-    }
-
-    @objc private func toggleLaunchAtLogin() {
-        do {
-            if isLaunchAtLoginEnabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            // 권한 거부 등 오류 시 시스템 설정 안내
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
-        }
-        rebuildMenu()
     }
 
     @objc func openClaude() {
@@ -238,16 +355,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openSettings() {
         if let win = settingsWindow, win.isVisible {
-            win.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
+            win.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return
         }
-
         let hostingView = NSHostingView(rootView: ShortcutSettingsView())
         hostingView.autoresizingMask = [.width, .height]
-
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 310, height: 200),
+            contentRect: NSRect(x: 0, y: 0, width: 310, height: 240),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -262,226 +375,75 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow = win
     }
 
-    // MARK: - Controller callbacks
-
-    private func setupControllerCallbacks() {
-        controller.onHideRequest           = { [weak self] in self?.hideCompanion() }
-        controller.onShowRequest           = { [weak self] in self?.showCompanion() }
-        controller.onOpenClaudeRequest     = { [weak self] in self?.openClaude() }
-        controller.onOpenSettingsRequest   = { [weak self] in self?.openSettings() }
-        controller.onShowStatusBarRequest  = { [weak self] in self?.showStatusBar() }
-
-        // 드래그로 위치 조정 — NSEvent 로컬 모니터로 마우스 델타를 직접 추적해 떨림 방지
-        controller.onPanelDragStart = { [weak self] in
-            guard let self else { return }
-            self.isDragging = true   // 드래그 중 ignoresMouseEvents 토글 방지
-            self.overlayPanel?.ignoresMouseEvents = false
-            self.lastMouseLocation = NSEvent.mouseLocation
-
-            self.dragEventMonitor = NSEvent.addLocalMonitorForEvents(
-                matching: [.leftMouseDragged, .leftMouseUp]
-            ) { [weak self] event in
-                guard let self else { return event }
-
-                if event.type == .leftMouseUp {
-                    if let m = self.dragEventMonitor { NSEvent.removeMonitor(m) }
-                    self.dragEventMonitor = nil
-                    self.isDragging = false
-                    if let origin = self.overlayPanel?.frame.origin {
-                        self.customPanelOrigin = origin
-                        self.saveOrigin(origin)
-                    }
-                    self.updateMousePassthrough()   // 드래그 종료 후 위치 재평가
-                    return event
-                }
-
-                // leftMouseDragged: 이전 위치와의 델타만큼 패널 이동
-                let current = NSEvent.mouseLocation
-                let dx = current.x - self.lastMouseLocation.x
-                let dy = current.y - self.lastMouseLocation.y
-                self.lastMouseLocation = current
-
-                if let panel = self.overlayPanel, let screen = NSScreen.main {
-                    var origin = panel.frame.origin
-                    // 좌우: 캐릭터가 최소 60px 화면 안에 남도록
-                    origin.x = max(screen.visibleFrame.minX - self.panelWidth + 60,
-                                   min(screen.visibleFrame.maxX - 60, origin.x + dx))
-                    // 상하: 상단은 메뉴바 포함 전체 화면 끝까지, 하단도 동일 비율로 허용
-                    origin.y = max(screen.visibleFrame.minY - self.panelHeight + 60,
-                                   min(screen.frame.maxY, origin.y + dy))
-                    panel.setFrameOrigin(origin)
-                    self.customPanelOrigin = origin
-                }
-                return event
-            }
-        }
-        controller.onPanelDrag    = { _ in }  // 로컬 모니터가 처리
-        controller.onPanelDragEnd = { }       // 로컬 모니터가 처리
-        controller.onResetPositionRequest = { [weak self] in
-            guard let self else { return }
-            self.customPanelOrigin = nil
-            UserDefaults.standard.removeObject(forKey: "panel.x")
-            UserDefaults.standard.removeObject(forKey: "panel.y")
-            if let screen = NSScreen.main {
-                self.overlayPanel?.setFrameOrigin(self.activeFrame(screen: screen).origin)
-            }
-        }
-
-        controller.$alwaysApprove
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.rebuildMenu() }
-            .store(in: &cancellables)
-
-        // 권한 버블 상태 변화 시 단축키 활성/비활성
-        controller.$state
-            .receive(on: DispatchQueue.main)
-            .map { if case .permission = $0 { return true }; return false }
-            .removeDuplicates()
-            .sink { [weak self] isPermission in
-                self?.hotkeyMonitor.updatePermissionState(isPermission)
-            }
-            .store(in: &cancellables)
+    @objc func resetPosition() {
+        sessions.values.first { $0.slot == 0 }?.controller.onResetPositionRequest?()
     }
 
-    // MARK: - Position persistence
+    // MARK: - 부팅 시 자동 실행
 
-    private func saveOrigin(_ origin: NSPoint) {
-        UserDefaults.standard.set(Double(origin.x), forKey: "panel.x")
-        UserDefaults.standard.set(Double(origin.y), forKey: "panel.y")
-    }
+    private var isLaunchAtLoginEnabled: Bool { SMAppService.mainApp.status == .enabled }
 
-    private func loadSavedOrigin() -> NSPoint? {
-        guard UserDefaults.standard.object(forKey: "panel.x") != nil else { return nil }
-        return NSPoint(x: UserDefaults.standard.double(forKey: "panel.x"),
-                       y: UserDefaults.standard.double(forKey: "panel.y"))
+    @objc private func toggleLaunchAtLogin() {
+        do {
+            if isLaunchAtLoginEnabled { try SMAppService.mainApp.unregister() }
+            else                      { try SMAppService.mainApp.register() }
+        } catch {
+            NSWorkspace.shared.open(
+                URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+        }
+        rebuildMenu()
     }
 
     // MARK: - Hotkey monitor
 
     private func setupHotkeyMonitor() {
         let store = ShortcutStore.shared
-        hotkeyMonitor.updateShortcuts(approve: store.approve,
-                                      deny: store.deny,
-                                      hide: store.hide)
-        hotkeyMonitor.onApprove = { [weak self] in self?.controller.approvePermission() }
-        hotkeyMonitor.onDeny    = { [weak self] in self?.controller.denyPermission() }
-        hotkeyMonitor.onHide    = { [weak self] in self?.toggleVisibility() }
+        hotkeyMonitor.updateShortcuts(approve: store.approve, deny: store.deny,
+                                      hide: store.hide, alwaysApprove: store.alwaysApprove)
+        // 승인·거부: 권한 요청 중인 모든 세션에 동시 적용
+        hotkeyMonitor.onApprove = { [weak self] in
+            self?.sessions.values.forEach {
+                if case .permission = $0.controller.state { $0.controller.approvePermission() }
+            }
+        }
+        hotkeyMonitor.onDeny = { [weak self] in
+            self?.sessions.values.forEach {
+                if case .permission = $0.controller.state { $0.controller.denyPermission() }
+            }
+        }
+        hotkeyMonitor.onHide          = { [weak self] in self?.toggleVisibility() }
+        // 전체 허용: 모든 세션에 동시 적용
+        hotkeyMonitor.onAlwaysApprove = { [weak self] in
+            self?.sessions.values.forEach { $0.controller.approveAllPermissions() }
+        }
     }
 
     private func setupSettingsCallbacks() {
-        Publishers.CombineLatest3(
+        Publishers.CombineLatest4(
             ShortcutStore.shared.$approve,
             ShortcutStore.shared.$deny,
-            ShortcutStore.shared.$hide
+            ShortcutStore.shared.$hide,
+            ShortcutStore.shared.$alwaysApprove
         )
         .debounce(for: .milliseconds(80), scheduler: DispatchQueue.main)
-        .sink { [weak self] approve, deny, hide in
-            self?.hotkeyMonitor.updateShortcuts(approve: approve, deny: deny, hide: hide)
+        .sink { [weak self] approve, deny, hide, alwaysApprove in
+            self?.hotkeyMonitor.updateShortcuts(approve: approve, deny: deny,
+                                                hide: hide, alwaysApprove: alwaysApprove)
         }
         .store(in: &cancellables)
     }
 
-    // MARK: - Overlay panel
+    // MARK: - Update checker
 
-    private func setupOverlayPanel() {
-        guard let screen = NSScreen.main else { return }
-
-        let panel = UnconstrainedPanel(
-            contentRect: peekFrame(screen: screen),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.backgroundColor = .clear
-        panel.isOpaque = false
-        panel.hasShadow = false
-        panel.isMovable = false
-        panel.ignoresMouseEvents = true   // 기본값: 클릭 통과 (마우스 위치에 따라 동적 전환)
-        panel.level = NSWindow.Level(rawValue: Int(NSWindow.Level.floating.rawValue) + 5)
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-
-        let rootView = CompanionView()
-            .environmentObject(controller)
-        panel.contentView = ClickThroughHostingView(rootView: rootView)
-        overlayPanel = panel
-
-        controller.$state
-            .receive(on: DispatchQueue.main)
-            .removeDuplicates()
-            .sink { [weak self] state in self?.animatePanel(for: state) }
-            .store(in: &cancellables)
-
-        setupMousePassthrough()
-    }
-
-    // MARK: - 마우스 위치 기반 클릭 통과
-
-    /// 마우스가 인터랙티브 영역(캐릭터/권한버블)에 있을 때만 패널이 이벤트를 수신하도록 토글.
-    /// NSHostingView.hitTest는 SwiftUI의 allowsHitTesting(false)를 다른 앱으로의 클릭 통과까지
-    /// 보장하지 않으므로, ignoresMouseEvents를 동적으로 제어하는 방식이 신뢰할 수 있다.
-    private func setupMousePassthrough() {
-        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
-        ) { [weak self] _ in
-            self?.updateMousePassthrough()
+    private func setupUpdateChecker() {
+        UpdateChecker.shared.onUpdateFound = { [weak self] ver in
+            guard let self, self.availableUpdate != ver else { return }
+            self.availableUpdate = ver
+            self.rebuildMenu()
+            self.sessions.values.forEach {
+                $0.controller.update(to: .notification("🆕 Buni v\(ver) 업데이트"), autohideAfter: 8)
+            }
         }
-    }
-
-    private func updateMousePassthrough() {
-        guard let panel = overlayPanel, panel.isVisible, !controller.isSliding, !isDragging else { return }
-        let mouse = NSEvent.mouseLocation
-        let shouldIgnore = !interactiveRect(for: panel).contains(mouse)
-        if panel.ignoresMouseEvents != shouldIgnore {
-            panel.ignoresMouseEvents = shouldIgnore
-        }
-    }
-
-    /// 마우스 이벤트를 수신해야 하는 영역 (스크린 좌표).
-    /// - 항상: 캐릭터 + 사용량 바 영역 (패널 우측 ~80px)
-    /// - permission 상태: 전체 하단 영역 (버블 버튼 포함)
-    private func interactiveRect(for panel: NSWindow) -> NSRect {
-        let f = panel.frame
-        let charWidth: CGFloat = 80
-        let charHeight: CGFloat = 90
-
-        if case .permission = controller.state {
-            // 권한 버블: 패널 전체 하단 영역
-            return NSRect(x: f.minX, y: f.minY, width: f.width, height: charHeight)
-        }
-        // 캐릭터 영역: 패널 우측 하단
-        return NSRect(x: f.maxX - charWidth, y: f.minY, width: charWidth, height: charHeight)
-    }
-
-    private func peekFrame(screen: NSScreen) -> NSRect {
-        if let origin = customPanelOrigin {
-            return NSRect(origin: origin, size: CGSize(width: panelWidth, height: panelHeight))
-        }
-        return NSRect(x: screen.visibleFrame.maxX - panelWidth,
-                      y: screen.visibleFrame.maxY - 40,
-                      width: panelWidth, height: panelHeight)
-    }
-
-    private func activeFrame(screen: NSScreen) -> NSRect {
-        let origin = customPanelOrigin ?? NSPoint(x: screen.visibleFrame.maxX - panelWidth,
-                                                   y: screen.visibleFrame.maxY - panelHeight)
-        return NSRect(origin: origin, size: CGSize(width: panelWidth, height: panelHeight))
-    }
-
-    private func animatePanel(for state: CompanionState) {
-        guard !controller.isSliding else { return }
-        guard let panel = overlayPanel, let screen = NSScreen.main else { return }
-        let targetFrame = (state == .idle) ? peekFrame(screen: screen) : activeFrame(screen: screen)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.45
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().setFrame(targetFrame, display: true)
-        }
-    }
-
-    // MARK: - Event monitor
-
-    private func startEventMonitor() {
-        eventMonitor = EventMonitor(controller: controller)
-        eventMonitor?.start()
+        UpdateChecker.shared.startPeriodicCheck()
     }
 }
