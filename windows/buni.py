@@ -64,6 +64,7 @@ TAB_GREEN  = '#47BF59'
 # ── Paths
 _TEMP      = Path(os.environ.get('TEMP', os.environ.get('TMP', 'C:/temp')))
 STATE_FILE = Path.home() / 'AppData' / 'Roaming' / 'Buni' / 'state.json'
+PID_FILE   = _TEMP / 'buni.pid'
 
 # ── Windows API for click-through transparent window
 _u32              = ctypes.windll.user32
@@ -635,6 +636,15 @@ class SessionWindow:
                                   x + w*P/2, y + h*P/2,
                                   fill=color, outline='', tags=tag)
 
+    def _oval(self, ox: float, oy: float, w: float, h: float,
+              color: str, tag: str = 'char') -> None:
+        """Ellipse at character-center offset (body_dx/dy applied)."""
+        x = CHAR_CX + ox + self.body_dx
+        y = CHAR_CY + oy + self.body_dy
+        self.cv.create_oval(x - w*P/2, y - h*P/2,
+                             x + w*P/2, y + h*P/2,
+                             fill=color, outline='', tags=tag)
+
     def _rounded_rect(self, x0, y0, x1, y1, r, fill, outline, tag='misc'):
         pts = [x0+r, y0,  x1-r, y0,  x1,  y0,   x1,  y0+r,
                x1,  y1-r, x1,  y1,   x1-r, y1,  x0+r, y1,
@@ -676,18 +686,37 @@ class SessionWindow:
 
     def _draw_ears(self):
         body, ear, *_ = CHARACTERS[self.character]
-        self._rect(-P*1.6, -P*3.5,        1.6, 3.4, body)
-        self._rect(-P*1.6, -P*3.5-P*0.1,  0.8, 2.7, ear)
-        self._rect( P*1.6, -P*3.5,        1.6, 3.4, body)
-        self._rect( P*1.6, -P*3.5-P*0.1,  0.8, 2.7, ear)
+        ch = self.character
+        # Ear dimensions per character (matching Swift views)
+        if ch == 'pinkRabbit':
+            ow, oh, iw, ih, xo, yo = 1.65, 3.4, 0.85, 2.7, P*1.55, P*3.5
+        elif ch == 'orangeRabbit':
+            ow, oh, iw, ih, xo, yo = 1.6,  3.3, 0.8,  2.6, P*1.7,  P*3.4
+        elif ch == 'yellowRabbit':
+            ow, oh, iw, ih, xo, yo = 1.6,  3.8, 0.8,  3.1, P*1.5,  P*3.8
+        elif ch == 'greenRabbit':
+            ow, oh, iw, ih, xo, yo = 1.8,  3.2, 1.0,  2.5, P*1.5,  P*3.3
+        else:  # rabbit, brownRabbit
+            ow, oh, iw, ih, xo, yo = 1.6,  3.4, 0.8,  2.7, P*1.6,  P*3.5
+        self._rect(-xo, -yo,        ow, oh, body)
+        self._rect(-xo, -yo-P*0.1,  iw, ih, ear)
+        self._rect( xo, -yo,        ow, oh, body)
+        self._rect( xo, -yo-P*0.1,  iw, ih, ear)
 
     def _draw_body_arms(self):
         body, ear, nose, extras = CHARACTERS[self.character]
-        # Body
-        self._rect(0, P*1.5, 4.5, 2.5, body)
+        ch = self.character
+        # Body size per character
+        if ch == 'orangeRabbit':
+            self._rect(0, P*1.5, 4.7, 2.6, body)
+        elif ch in ('pinkRabbit', 'greenRabbit'):
+            self._rect(0, P*1.5, 4.6, 2.5, body)
+        else:
+            self._rect(0, P*1.5, 4.5, 2.5, body)
         # Arms (with dark outline when holding laptop/doc)
-        lx = -P*2.65 + self.larm_dx;  ly = P*1.1 + self.larm_dy
-        rx =  P*2.65 + self.rarm_dx;  ry = P*1.1 + self.rarm_dy
+        arm_x = P*2.70 if ch == 'orangeRabbit' else P*2.68 if ch == 'greenRabbit' else P*2.65
+        lx = -arm_x + self.larm_dx;  ly = P*1.1 + self.larm_dy
+        rx =  arm_x + self.rarm_dx;  ry = P*1.1 + self.rarm_dy
         if self.show_laptop or self.show_reading:
             self._rect(lx, ly, 1.9, 1.2, '#3A3A3A')   # outline
             self._rect(rx, ry, 1.9, 1.2, '#3A3A3A')
@@ -696,33 +725,98 @@ class SessionWindow:
 
     def _draw_feet(self):
         body = CHARACTERS[self.character][0]
-        self._rect(-P*1.2, P*2.9, 1.5, 0.9, body)
-        self._rect( P*1.2, P*2.9, 1.5, 0.9, body)
+        ch = self.character
+        # Foot size per character
+        if ch in ('orangeRabbit', 'greenRabbit'):
+            self._rect(-P*1.2, P*2.9, 1.6, 1.0, body)
+            self._rect( P*1.2, P*2.9, 1.6, 1.0, body)
+        else:
+            self._rect(-P*1.2, P*2.9, 1.5, 0.9, body)
+            self._rect( P*1.2, P*2.9, 1.5, 0.9, body)
 
     def _draw_head(self):
         body, ear, nose, extras = CHARACTERS[self.character]
-        # Head
-        self._rect(0, -P*0.8, 5.5, 2.5, body)
-        # Eyebrows + stubble (두니 only)
+        ch = self.character
+
+        # ── Head size (per-character, matching each Swift view)
+        if ch in ('pinkRabbit', 'orangeRabbit', 'greenRabbit'):
+            self._rect(0, -P*0.8, 5.6, 2.6, body)
+        else:
+            self._rect(0, -P*0.8, 5.5, 2.5, body)
+
+        # ── Eyebrows + stubble (두니 only)
         if 'brow' in extras:
             brow = extras['brow']
             self._rect(-P*1.45, -P*1.35, 0.95, 0.24, brow)
             self._rect( P*1.45, -P*1.35, 0.95, 0.24, brow)
             self._rect(-P*0.85, -P*0.10, 0.20, 0.20, brow)
             self._rect( P*0.85, -P*0.10, 0.20, 0.20, brow)
-        # Blush (누니 only)
-        if extras.get('blush'):
-            self._rect(-P*1.85, -P*0.15, 0.70, 0.40, '#F5B06E')
-            self._rect( P*1.85, -P*0.15, 0.70, 0.40, '#F5B06E')
-        # Eyes
-        ey = -P*0.9
-        if self.blinking:    eh = 0.12
-        elif self.wide_eyes: eh = 1.10
-        else:                eh = 0.75
-        self._rect(-P*1.4, ey, 0.65, eh, '#000000')
-        self._rect( P*1.4, ey, 0.65, eh, '#000000')
-        # Nose
-        self._rect(0, -P*0.25, 0.55, 0.40, nose)
+
+        # ── Blush / cheeks (character-specific, drawn before eyes)
+        if ch == 'pinkRabbit':
+            # 푸니: 크고 부드러운 타원형 볼 홍조
+            # pre-blended: Color(0.98,0.62,0.75).opacity(0.55) over #FAC7E0
+            self._oval(-P*1.9, -P*0.30, 1.6, 1.0, '#FAB0CE')
+            self._oval( P*1.9, -P*0.30, 1.6, 1.0, '#FAB0CE')
+        elif ch == 'orangeRabbit':
+            # 주니: 발랄한 둥근 볼터치
+            # pre-blended: Color(1.0,0.70,0.50).opacity(0.55) over #F28520
+            self._oval(-P*1.8, -P*0.35, 1.4, 1.0, '#F9A055')
+            self._oval( P*1.8, -P*0.35, 1.4, 1.0, '#F9A055')
+        elif ch == 'yellowRabbit':
+            # 누니: 작고 따뜻한 타원형 볼 홍조 (위치 맥버전 기준으로 수정)
+            self._oval(-P*1.55, -P*0.42, 0.68, 0.28, '#F5B06E')
+            self._oval( P*1.55, -P*0.42, 0.68, 0.28, '#F5B06E')
+
+        # ── Eye parameters (per-character, matching each Swift eyeBlock)
+        if ch == 'pinkRabbit':
+            ew, ex, ey_off = 0.75, P*1.45, P*0.92
+            eh_n, eh_w, eh_b = 0.90, 1.20, 0.10
+        elif ch == 'orangeRabbit':
+            ew, ex, ey_off = 0.68, P*1.42, P*0.88
+            eh_n, eh_w, eh_b = 0.78, 1.10, 0.10
+        elif ch == 'yellowRabbit':
+            ew, ex, ey_off = 0.68, P*1.4,  P*0.90
+            eh_n, eh_w, eh_b = 0.82, 1.15, 0.11
+        elif ch == 'greenRabbit':
+            ew, ex, ey_off = 0.72, P*1.42, P*0.90
+            eh_n, eh_w, eh_b = 0.60, 1.05, 0.10
+        else:  # rabbit, brownRabbit
+            ew, ex, ey_off = 0.65, P*1.4,  P*0.90
+            eh_n, eh_w, eh_b = 0.75, 1.10, 0.12
+
+        ey = -ey_off
+        if self.blinking:    eh = eh_b
+        elif self.wide_eyes: eh = eh_w
+        else:                eh = eh_n
+
+        self._rect(-ex, ey, ew, eh, '#000000')
+        self._rect( ex, ey, ew, eh, '#000000')
+
+        # ── Eye sparkle highlights (푸니, 누니)
+        if not self.blinking:
+            if ch == 'pinkRabbit':
+                self._rect(-P*1.60, ey - P*0.28, 0.22, 0.22, '#FFEAF5')
+                self._rect( P*1.30, ey - P*0.28, 0.22, 0.22, '#FFEAF5')
+            elif ch == 'yellowRabbit':
+                self._rect(-P*1.54, ey - P*0.22, 0.22, 0.22, '#FFFFFF')
+                self._rect( P*1.26, ey - P*0.22, 0.22, 0.22, '#FFFFFF')
+
+        # ── Nose (per-character shape and size)
+        if ch == 'pinkRabbit':
+            # 픽셀아트 하트 코 (PinkRabbitCharacterView.heartNoseView)
+            ny = -P*0.22
+            self._rect(-P*0.17, ny - P*0.17, 0.30, 0.30, nose)
+            self._rect( P*0.17, ny - P*0.17, 0.30, 0.30, nose)
+            self._rect(0,       ny,           0.52, 0.28, nose)
+            self._rect(0,       ny + P*0.22,  0.30, 0.24, nose)
+            self._rect(0,       ny + P*0.40,  0.16, 0.18, nose)
+        elif ch in ('orangeRabbit', 'yellowRabbit'):
+            self._rect(0, -P*0.24, 0.58, 0.40, nose)
+        elif ch == 'greenRabbit':
+            self._rect(0, -P*0.24, 0.60, 0.40, nose)
+        else:
+            self._rect(0, -P*0.25, 0.55, 0.40, nose)
 
     # ── Laptop ────────────────────────────────────────────────
 
@@ -1126,7 +1220,7 @@ class SessionWindow:
         if new_state == 'idle':
             self.msg = None
             self._draw()
-            self.hide()
+            # 자동 숨기기 제거 — 사용자가 직접 숨기기 전까지 표시 유지
 
         elif new_state == 'thinking':
             self.msg = '코딩중'
@@ -1433,7 +1527,8 @@ class SessionWindow:
         try:
             size = self.event_file.stat().st_size
         except FileNotFoundError:
-            return False
+            # 파일이 삭제됐어도 창은 유지 — 사용자가 숨길 때까지
+            return True
         if size <= self._file_offset:
             return True
         try:
@@ -1484,10 +1579,7 @@ class SessionWindow:
 
         elif t == 'done':
             self._apply_state('completed')
-            # 완료 애니메이션 후 이벤트 파일 삭제 → 세션 자동 제거
-            # (windows-default 고정 파일은 유지)
-            if self.session_id != 'windows-default':
-                self.win.after(6000, self._cleanup_event_file)
+            # 자동 파일 삭제·세션 제거 없음 — 사용자가 숨기기 전까지 유지
 
         elif t == 'notification':
             self._apply_state('notification', notif=ev.get('message', '알림'))
@@ -1573,6 +1665,12 @@ class BuniManager:
     def __init__(self):
         self.root = tk.Tk()
         self.root.withdraw()   # hidden background window
+
+        # PID 파일 기록 — 훅이 부니 실행 여부 확인에 사용
+        try:
+            PID_FILE.write_text(str(os.getpid()), encoding='utf-8')
+        except Exception:
+            pass
 
         self.persist  = PersistenceManager()
         self.sessions: dict[str, SessionWindow] = {}
@@ -1666,6 +1764,10 @@ class BuniManager:
             win.show()
 
     def quit(self):
+        try:
+            PID_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
         self.root.quit()
         sys.exit(0)
 
