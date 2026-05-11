@@ -1793,9 +1793,15 @@ class BuniManager:
                     sid = self._sid_from_file(fp)
                     found[sid] = fp
                 # Windows 훅이 세션 ID 없이 고정 파일명으로 쓰는 경우도 감지
+                # 단, 최근 30초 이내에 실제로 이벤트가 기록된 파일만 유효한 세션으로 인식
+                # (install_hooks.py의 touch()로 인한 유령 세션 방지)
                 fixed = _TEMP / 'claude-companion-events.jsonl'
                 if fixed.exists() and 'windows-default' not in found:
-                    found['windows-default'] = fixed
+                    try:
+                        if time.time() - fixed.stat().st_mtime < 30:
+                            found['windows-default'] = fixed
+                    except Exception:
+                        pass
 
                 # New sessions
                 for sid, fp in found.items():

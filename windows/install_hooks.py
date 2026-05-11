@@ -246,7 +246,8 @@ SCRIPTS = {
 def main():
     CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
     EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    EVENTS_FILE.touch(exist_ok=True)
+    # EVENTS_FILE.touch() 제거 — touch()가 mtime을 갱신하면 Buni가
+    # 고정 파일을 유효한 세션으로 오해해 유령 세션(중복 창)을 생성함
 
     # 훅 스크립트 작성
     for name, content in SCRIPTS.items():
