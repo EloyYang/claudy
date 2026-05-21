@@ -198,10 +198,6 @@ class EventMonitor {
             controller.update(to: .thinking)  // 도구 완료 후 항상 thinking(타이핑)으로 복귀
         case "done":
             controller.update(to: .completed)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-                guard let self, case .completed = self.controller.state else { return }
-                self.controller.update(to: .ready)
-            }
         case "notification":
             // ask_user 상태 중(pendingPermissionId == nil인 permission)에는 덮어쓰지 않음
             if case .permission = controller.state, controller.pendingPermissionId == nil { break }

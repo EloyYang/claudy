@@ -84,6 +84,11 @@ class CompanionController: ObservableObject {
         approvePermission()
     }
 
+    func dismissCompleted() {
+        guard case .completed = state else { return }
+        update(to: .ready)
+    }
+
     func update(to newState: CompanionState, autohideAfter seconds: Double? = nil) {
         DispatchQueue.main.async {
             self.autoHideTask?.cancel()

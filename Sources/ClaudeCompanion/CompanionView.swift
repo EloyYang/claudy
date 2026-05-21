@@ -35,7 +35,7 @@ struct CompanionView: View {
                     }
                 }
                 .padding(.bottom, 6)
-                .allowsHitTesting(isPermission)
+                .allowsHitTesting(isPermission || isCompleted)
 
                 // 캐릭터 + 플랜 사용량 바
                 VStack(spacing: -5) {
@@ -157,17 +157,29 @@ struct CompanionView: View {
         }
     }
 
-    // MARK: - 완료 버블 (권한 요청과 동일한 스타일)
+    // MARK: - 완료 버블
 
     @ViewBuilder
     private var completionBubbleView: some View {
         ZStack(alignment: .trailing) {
-            Text("완료됐어요!")
-                .font(.system(.callout, design: .monospaced))
-                .fontWeight(.bold)
-                .foregroundColor(.black)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 5) {
+                    Text("✅")
+                    Text("완료했어요!")
+                        .font(.system(.callout, design: .monospaced))
+                        .fontWeight(.bold)
+                        .foregroundColor(.black)
+                }
+                HStack {
+                    Spacer()
+                    confirmButton("확인", color: Color(red: 0.20, green: 0.70, blue: 0.35)) {
+                        ctrl.dismissCompleted()
+                    }
+                }
+            }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
+            .frame(maxWidth: 210, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 14)
                     .fill(Color.white)
@@ -186,6 +198,18 @@ struct CompanionView: View {
                 removal:   .opacity
             )
         )
+    }
+
+    private func confirmButton(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 7).fill(color))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 권한 요청 버블
