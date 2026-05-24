@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Buni for Windows v1.2.0
+Buni for Windows v1.3.2
 Claude Code companion – pixel-art rabbit mascot
 https://github.com/EloyYang/buni
 """
@@ -474,7 +474,8 @@ class SessionWindow:
         self._reading_job  = None
         self._blink_job    = None
         self._idle_job     = None
-        self._perm_win: tk.Toplevel | None = None
+        self._perm_win:        tk.Toplevel | None = None
+        self._completion_win: tk.Toplevel | None = None
         self._destroyed    = False
 
         # ── File monitoring
@@ -1257,8 +1258,7 @@ class SessionWindow:
             self.wide_eyes = True
             self._bounce(high=True)
             self._draw()
-            self.win.after(3000, lambda: (
-                self._apply_state('ready') if self.state == 'completed' else None))
+            self._show_completion_popup()
 
         elif new_state == 'ready':
             self.msg = None
@@ -1268,6 +1268,105 @@ class SessionWindow:
     def _clear_msg_if(self, old_msg):
         if not self._destroyed and self.msg == old_msg:
             self.msg = None; self._draw()
+
+    # ── Completion popup ─────────────────────────────────────────
+
+    def _dismiss_completed(self):
+        if self._completion_win:
+            try: self._completion_win.destroy()
+            except Exception: pass
+            self._completion_win = None
+        if self.state == 'completed':
+            self._apply_state('ready')
+
+    def _show_completion_popup(self):
+        if self._completion_win and self._completion_win.winfo_exists():
+            self._completion_win.destroy()
+
+        TRANSP_  = '#010101'
+        WHITE    = '#FFFFFF'
+        SHADOW   = '#BBBBBB'
+        BW       = 160
+        TAIL_W   = 15
+        R        = 14
+        PAD      = 12
+        TITLE_H  = 20
+        BTN_H    = 28
+        GAP      = 6
+        WIN_H_   = PAD + TITLE_H + GAP + BTN_H + PAD
+
+        def _get_geometry(h):
+            self.win.update_idletasks()
+            rx = self.win.winfo_rootx(); ry = self.win.winfo_rooty()
+            pw = BW + TAIL_W
+            tail_tip_x = int(CHAR_CX - P * 5) + 9 - 30
+            wx = rx + tail_tip_x - pw
+            wy = ry + int(CHAR_CY - P * 3.5) - h // 2
+            return pw, wx, wy
+
+        def _bubble(cv, ox, oy, h, color):
+            x0, y0, x1, y1 = ox, oy, ox + BW, oy + h
+            cv.create_arc(x0, y0, x0+2*R, y0+2*R, start=90, extent=90,
+                          fill=color, outline=color, tags='bubble')
+            cv.create_arc(x1-2*R, y0, x1, y0+2*R, start=0, extent=90,
+                          fill=color, outline=color, tags='bubble')
+            cv.create_arc(x0, y1-2*R, x0+2*R, y1, start=180, extent=90,
+                          fill=color, outline=color, tags='bubble')
+            cv.create_arc(x1-2*R, y1-2*R, x1, y1, start=270, extent=90,
+                          fill=color, outline=color, tags='bubble')
+            cv.create_rectangle(x0+R, y0, x1-R, y1,   fill=color, outline=color, tags='bubble')
+            cv.create_rectangle(x0, y0+R, x1, y1-R,   fill=color, outline=color, tags='bubble')
+            mid = oy + h // 2
+            cv.create_polygon(x1, mid-7, x1+TAIL_W+ox, mid, x1, mid+7,
+                              fill=color, outline=color, tags='bubble')
+
+        WIN_W_, wx, wy = _get_geometry(WIN_H_)
+        win = tk.Toplevel(self.win)
+        self._completion_win = win
+        win.overrideredirect(True)
+        win.wm_attributes('-topmost', True)
+        win.wm_attributes('-transparentcolor', TRANSP_)
+        win.config(bg=TRANSP_)
+        win.geometry(f'{WIN_W_}x{WIN_H_}+{wx}+{wy}')
+
+        cv = tk.Canvas(win, width=WIN_W_, height=WIN_H_,
+                       bg=TRANSP_, highlightthickness=0)
+        cv.pack()
+
+        _bubble(cv, 2, 3, WIN_H_, SHADOW)
+        _bubble(cv, 0, 0, WIN_H_, WHITE)
+
+        cv.create_text(PAD + 4, PAD + 2, text='✅ 완료했어요!',
+                       anchor='nw', font=('Consolas', 10, 'bold'),
+                       fill='#000000', tags='bubble')
+
+        def _darken(hex_color):
+            r = max(0, int(hex_color[1:3], 16) - 30)
+            g = max(0, int(hex_color[3:5], 16) - 30)
+            b = max(0, int(hex_color[5:7], 16) - 30)
+            return f'#{r:02X}{g:02X}{b:02X}'
+
+        btn_y = PAD + TITLE_H + GAP
+        bg    = '#2DB357'
+        label = '확인'
+        bw    = len(label) * 9 + 20
+        bx    = PAD
+        br    = 7
+        by0, by1 = btn_y, btn_y + BTN_H
+        for dx0,dy0,dx1,dy1,st in [
+            (bx,by0,bx+2*br,by0+2*br,90),(bx+bw-2*br,by0,bx+bw,by0+2*br,0),
+            (bx,by1-2*br,bx+2*br,by1,180),(bx+bw-2*br,by1-2*br,bx+bw,by1,270)]:
+            cv.create_arc(dx0,dy0,dx1,dy1, start=st, extent=90,
+                          fill=bg, outline=bg, tags=('btn', 'btnbg', 'bubble'))
+        cv.create_rectangle(bx+br, by0, bx+bw-br, by1, fill=bg, outline=bg, tags=('btn','btnbg','bubble'))
+        cv.create_rectangle(bx, by0+br, bx+bw, by1-br,  fill=bg, outline=bg, tags=('btn','btnbg','bubble'))
+        cv.create_text(bx + bw//2, btn_y + BTN_H//2, text=label,
+                       font=('Consolas', 9, 'bold'), fill='white', tags=('btn','bubble'))
+        cv.tag_bind('btn', '<Button-1>', lambda _: self._dismiss_completed())
+        cv.tag_bind('btn', '<Enter>',
+                    lambda _: cv.itemconfig('btnbg', fill=_darken(bg), outline=_darken(bg)))
+        cv.tag_bind('btn', '<Leave>',
+                    lambda _: cv.itemconfig('btnbg', fill=bg, outline=bg))
 
     # ── Permission popup ──────────────────────────────────────
 
@@ -1673,6 +1772,9 @@ class SessionWindow:
         if self._perm_win:
             try: self._perm_win.destroy()
             except Exception: pass
+        if self._completion_win:
+            try: self._completion_win.destroy()
+            except Exception: pass
         try: self.win.destroy()
         except Exception: pass
 
@@ -1698,6 +1800,7 @@ class BuniManager:
         self._is_manually_hidden = False
         self._monthly_tokens = 0
         self._claude_was_running = False
+        self._claude_not_running_streak = 0
         self._server_utilization: float | None = None
         self._server_resets_at:   datetime.datetime | None = None
 
@@ -1844,13 +1947,21 @@ class BuniManager:
 
                 # Claude process state (for idle detection)
                 running = self._is_claude_running()
-                if not running and self._claude_was_running:
-                    # All sessions go idle
-                    self.root.after(0, self._all_sessions_idle)
-                elif running and not self._claude_was_running:
-                    # Claude started — sessions already created via file detection
-                    pass
-                self._claude_was_running = running
+                if running:
+                    if self._claude_not_running_streak >= 3 and self.sessions:
+                        # Claude 재감지 — 숨겼던 창 복원 (수동 숨기기 제외)
+                        if not self._is_manually_hidden:
+                            self.root.after(0, self.show_all)
+                    self._claude_not_running_streak = 0
+                    self._claude_was_running = True
+                else:
+                    self._claude_not_running_streak += 1
+
+                if self._claude_was_running and self._claude_not_running_streak >= 3:
+                    # 3틱(~3초) 연속 미감지 시 창 숨기기 (즉시 idle 전환 대신)
+                    self._claude_was_running = False
+                    if self.sessions:
+                        self.root.after(0, self.hide_all)
 
             except Exception:
                 pass
@@ -2060,6 +2171,8 @@ class BuniManager:
         for win in self.sessions.values():
             if win.state == 'permission':
                 win._decide('approve')
+            elif win.state == 'completed':
+                win._dismiss_completed()
 
     def _hk_deny(self):
         for win in self.sessions.values():
@@ -2068,7 +2181,9 @@ class BuniManager:
 
     def _hk_always_approve(self):
         for win in self.sessions.values():
-            if win.state == 'permission':
+            if win.state == 'completed':
+                win._dismiss_completed()
+            elif win.state == 'permission':
                 win._decide('approve_all')
 
     def _hk_hide(self):
