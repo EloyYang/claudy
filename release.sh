@@ -57,24 +57,30 @@ gh release create "v$VERSION" \
 3. 처음 실행 시 Gatekeeper 경고가 뜨면:
    - 시스템 설정 → 개인정보 보호 및 보안 → **확인 없이 열기**
    - 또는 터미널: \`xattr -dr com.apple.quarantine /Applications/Buni.app\`
-4. Claude Code 훅 설정:
-   \`\`\`bash
-   cd buni && bash install.sh
-   \`\`\`
+4. 실행하면 Claude Code 훅이 **자동으로 설치**됩니다.
 
 ---
 
 ## 🪟 Windows 설치
 
 1. **Buni-Windows.exe** 다운로드 후 실행
-2. Claude Code 훅 설정 (최초 1회):
-   \`\`\`bat
-   curl -L https://raw.githubusercontent.com/EloyYang/buni/main/windows/install_hooks.py -o install_hooks.py
-   python install_hooks.py
-   \`\`\`
+2. 실행하면 Claude Code 훅이 **자동으로 설치**됩니다.
 
-> Windows exe는 Python 설치 없이 바로 실행됩니다.
-> *(Buni-Windows.exe는 GitHub Actions가 자동 빌드해 수 분 내 추가됩니다)*"
+> *(Buni-Windows.exe는 GitHub Actions가 자동 빌드해 수 분 내 추가됩니다)*
+
+---
+
+## 🔗 VS Code SSH Remote 지원
+
+VS Code에서 SSH 원격 서버에 접속해 Claude Code를 사용할 경우, Buni 실행 시 VS Code \`settings.json\`이 **자동으로 설정**됩니다.
+
+수동으로 추가하려면 VS Code \`settings.json\` (\`Cmd+Shift+P\` → *Preferences: Open User Settings (JSON)*) 에 아래 항목을 추가하세요:
+
+\`\`\`json
+\"remote.SSH.extraArgs\": [\"-R\", \"58765:localhost:58765\"]
+\`\`\`
+
+이후 VS Code로 SSH 접속 시 원격 Claude Code 세션이 로컬 Buni에 자동으로 표시됩니다."
 
 RELEASE_URL="https://github.com/EloyYang/buni/releases/tag/v$VERSION"
 echo "✓ 릴리즈 완료: $RELEASE_URL"
