@@ -64,8 +64,9 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Buni-Windows.exe"; \
 
 [Code]
 procedure InitializeWizard();
+var
+  ResultCode: Integer;
 begin
-  // 설치 전 실행 중인 Buni 종료
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Buni-Windows.exe',
        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
