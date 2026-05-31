@@ -43,7 +43,7 @@ Source: "{#ExeSource}"; DestDir: "{app}"; DestName: "Buni-Windows.exe"; Flags: i
 
 [Icons]
 Name: "{userprograms}\{#AppName}"; Filename: "{app}\Buni-Windows.exe"; Comment: "Claude Code 동반자 앱"
-Name: "{commondesktop}\{#AppName}"; Filename: "{app}\Buni-Windows.exe"; Tasks: desktopicon
+Name: "{userdesktop}\{#AppName}"; Filename: "{app}\Buni-Windows.exe"; Tasks: desktopicon
 
 [Registry]
 ; 자동 시작 (선택 시)
