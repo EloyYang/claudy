@@ -8,6 +8,7 @@ private struct ClaudeEvent: Decodable {
     let percent: Double?
     let id: String?
     let sessionStartTs: String?
+    let ts: Double?   // Unix timestamp — thinking 이벤트 신선도 판단용
 }
 
 class EventMonitor {
@@ -39,12 +40,12 @@ class EventMonitor {
         }
         if let attrs = try? FileManager.default.attributesOfItem(atPath: eventFile),
            let size  = attrs[.size] as? Int {
-            // 파일 생성 후 90초 이내: 처음부터 읽어 세션 시작 초반(파일 탐색 등) 이벤트 누락 방지
-            // 수정 날짜 대신 생성 날짜 사용 — 수정 날짜는 이벤트가 계속 쓰일수록 갱신되어 신뢰 불가
-            // 90초 초과(오래된 세션): 끝에서부터 읽어 과거 이벤트 재생 방지
+            // 파일 생성 후 90초 이내: 처음부터 읽어 세션 시작 초반 이벤트 누락 방지
+            // 90초 초과(오래된 세션): 끝에서 1KB 되돌아가 읽기
+            //   — Buni 재시작 시 앱 초기화(~2s) 동안 쓰인 이벤트를 fileOffset=size로 놓치는 문제 방지
             let creationAge = (attrs[FileAttributeKey.creationDate] as? Date)
                 .map { Date().timeIntervalSince($0) } ?? 9999
-            fileOffset = creationAge < 90.0 ? 0 : size
+            fileOffset = creationAge < 90.0 ? 0 : max(0, size - 1024)
         }
         restoreLastUsage()
     }
@@ -200,7 +201,9 @@ class EventMonitor {
         case "tool_done":
             controller.update(to: .thinking)  // 도구 완료 후 항상 thinking(타이핑)으로 복귀
         case "thinking":
-            if isReplaying { break }   // 과거 thinking 이벤트 재생 건너뜀
+            // 30초 이내의 이벤트는 replay 중에도 처리 — 새 세션 시작 시 토큰 소비 구간부터 모션 적용
+            let isStale = event.ts.map { Date().timeIntervalSince1970 - $0 > 30 } ?? true
+            if isReplaying && isStale { break }
             switch controller.state {
             case .ready, .completed:
                 controller.update(to: .thinking)
@@ -212,7 +215,8 @@ class EventMonitor {
             if isReplaying { break }   // 과거 done 재생 시 세션 조기 제거 방지
             controller.update(to: .completed)
         case "notification":
-            // ask_user 상태 중(pendingPermissionId == nil인 permission)에는 덮어쓰지 않음
+            let notifStale = event.ts.map { Date().timeIntervalSince1970 - $0 > 30 } ?? true
+            if isReplaying && notifStale { break }
             if case .permission = controller.state, controller.pendingPermissionId == nil { break }
             controller.update(to: .notification(event.message ?? "알림"), autohideAfter: 5)
         case "permission":
@@ -224,6 +228,8 @@ class EventMonitor {
                 self.controller.update(to: .permission(msg))
             }
         case "permission_request":
+            let permStale = event.ts.map { Date().timeIntervalSince1970 - $0 > 30 } ?? true
+            if isReplaying && permStale { break }
             if let reqId = event.id {
                 if controller.alwaysApprove {
                     let file = "/tmp/claude-companion-decision-\(reqId)"

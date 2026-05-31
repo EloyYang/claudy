@@ -26,10 +26,11 @@ class SessionWindow {
     private var mouseMonitor: Any?
 
     // ── AppDelegate 에서 주입하는 콜백
-    var onOpenClaude:    (() -> Void)?
-    var onOpenSettings:  (() -> Void)?
-    var onShowStatusBar: (() -> Void)?
-    var onSessionEnded:  (() -> Void)?
+    var onOpenClaude:         (() -> Void)?
+    var onOpenSettings:       (() -> Void)?
+    var onShowStatusBar:      (() -> Void)?
+    var onSessionEnded:       (() -> Void)?   // 사용자 확인 / 프로세스 종료 → ignoredSessionIds 추가
+    var onStaledSessionEnded: (() -> Void)?   // 비활동 타임아웃 → ignoredSessionIds 추가 안 함 (재탐지 허용)
     /// 슬롯 0이 드래그로 위치를 바꿀 때 저장 요청 (NSPoint(-1,-1) = 리셋)
     var onSaveOrigin:    ((NSPoint) -> Void)?
     var onRebuildMenu:   (() -> Void)?
@@ -89,7 +90,7 @@ class SessionWindow {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.hideCompanion()
         }
-        onSessionEnded?()
+        onStaledSessionEnded?()
     }
 
     private func removeMouseMonitors() {
@@ -394,12 +395,19 @@ class SessionWindow {
             let dy = current.y - self.lastMouseLoc.y
             self.lastMouseLoc = current
 
-            if let panel = self.panel, let screen = NSScreen.main {
+            if let panel = self.panel {
                 var o = panel.frame.origin
-                o.x = max(screen.visibleFrame.minX - self.panelWidth + 60,
-                          min(screen.visibleFrame.maxX - 60, o.x + dx))
-                o.y = max(screen.visibleFrame.minY - self.panelHeight + 60,
-                          min(screen.frame.maxY, o.y + dy))
+                o.x += dx
+                o.y += dy
+                // 마우스 커서가 있는 스크린 기준으로 클램핑 (멀티 모니터 대응)
+                let screen = NSScreen.screens.first { $0.frame.contains(current) }
+                    ?? NSScreen.main
+                if let screen = screen {
+                    o.x = max(screen.visibleFrame.minX - self.panelWidth + 60,
+                              min(screen.visibleFrame.maxX - 60, o.x))
+                    o.y = max(screen.visibleFrame.minY - self.panelHeight + 60,
+                              min(screen.frame.maxY, o.y))
+                }
                 panel.setFrameOrigin(o)
                 self.customOrigin = o
             }

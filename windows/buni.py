@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Buni for Windows v1.3.3
+Buni for Windows v1.3.5
 Claude Code companion – pixel-art rabbit mascot
 https://github.com/EloyYang/buni
 """
 import tkinter as tk
 from tkinter import simpledialog
 import threading
-import json, time, os, sys, math, glob, random, re, base64
+import json, time, os, sys, math, glob, random, re, base64, shutil, uuid
 import ctypes, datetime, queue
 from pathlib import Path
 
@@ -65,6 +65,560 @@ TAB_GREEN  = '#47BF59'
 _TEMP      = Path(os.environ.get('TEMP', os.environ.get('TMP', 'C:/temp')))
 STATE_FILE = Path.home() / 'AppData' / 'Roaming' / 'Buni' / 'state.json'
 PID_FILE   = _TEMP / 'buni.pid'
+
+# ══════════════════════════════════════════════════════════════
+# Claude Code 훅 자동 설치 (최초 실행 시 1회, 멱등)
+# ══════════════════════════════════════════════════════════════
+
+_CLAUDE_DIR = Path.home() / '.claude'
+
+# ── 내장 훅 스크립트 ─────────────────────────────────────────
+
+_HOOK_PRETOOL = '''\
+#!/usr/bin/env python3
+import sys, json, os, uuid, time
+from pathlib import Path
+
+TEMP = Path(os.environ.get("TEMP", os.environ.get("TMP", "C:/temp")))
+PID_FILE = TEMP / "buni.pid"
+SAFE_TOOLS = {"Read", "Glob", "Grep", "LS", "WebSearch", "WebFetch",
+              "TodoRead", "NotebookRead", "AskUserQuestion"}
+BUNI_PORT = 58765
+
+
+def _is_buni_running():
+    try:
+        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+        import ctypes
+        handle = ctypes.windll.kernel32.OpenProcess(0x0400, False, pid)
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _events_file(session_id):
+    sid = (session_id or "").strip()
+    if sid:
+        safe = "".join(c for c in sid if c.isalnum() or c in "-_")
+        if safe:
+            return TEMP / f"claude-companion-events-{safe}.jsonl"
+    return TEMP / "claude-companion-events.jsonl"
+
+
+def _send_tcp(payload):
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        s.connect(("127.0.0.1", BUNI_PORT))
+        s.sendall((json.dumps(payload) + "\\n").encode("utf-8"))
+        s.close()
+    except Exception:
+        pass
+
+
+try:
+    raw = sys.stdin.buffer.read()
+    d = json.loads(raw.decode("utf-8", errors="replace"))
+    tool_name  = d.get("tool_name", "tool")
+    tool_input = d.get("tool_input", {}) or {}
+    session_id = d.get("session_id", "")
+    events     = _events_file(session_id)
+    is_remote  = bool(os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"))
+
+    if is_remote:
+        # SSH Remote — 권한 UI 없이 tool_use 이벤트만 TCP 전송
+        _send_tcp({"type": "tool_use", "tool": tool_name, "session_id": session_id})
+    else:
+        if not events.exists():
+            events.touch()
+
+        if tool_name in SAFE_TOOLS or not _is_buni_running():
+            with events.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "tool_use", "tool": tool_name}) + "\\n")
+        else:
+            if tool_name == "Bash":
+                message = tool_input.get("command", "")[:200]
+            elif tool_name == "Write":
+                path = tool_input.get("file_path", tool_input.get("path", ""))
+                message = f"[파일 쓰기] {path}"[:200]
+            elif tool_name in ("Edit", "MultiEdit"):
+                path = tool_input.get("file_path", tool_input.get("path", ""))
+                message = f"[파일 수정] {path}"[:200]
+            else:
+                first_val = next(iter(tool_input.values()), "") if tool_input else ""
+                message = f"[{tool_name}] {first_val}"[:200] if first_val else tool_name
+
+            req_id    = str(uuid.uuid4())[:8]
+            resp_file = TEMP / f"claude-companion-decision-{req_id}"
+
+            with events.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "type":    "permission_request",
+                    "id":      req_id,
+                    "tool":    tool_name,
+                    "message": message,
+                    "ts":      time.time()
+                }) + "\\n")
+
+            approved = True
+            for _ in range(120):
+                if resp_file.exists():
+                    try:
+                        decision = resp_file.read_text(encoding="utf-8").strip()
+                        resp_file.unlink(missing_ok=True)
+                        approved = (decision != "deny")
+                    except Exception:
+                        pass
+                    break
+                time.sleep(0.5)
+
+            if not approved:
+                print(json.dumps({"decision": "block", "reason": "사용자가 거부했습니다."}))
+                sys.exit(2)
+
+            with events.open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"type": "tool_use", "tool": tool_name}) + "\\n")
+
+except Exception:
+    pass
+'''
+
+_HOOK_POSTTOOL = '''\
+#!/usr/bin/env python3
+import sys, json, os
+from pathlib import Path
+
+TEMP = Path(os.environ.get("TEMP", os.environ.get("TMP", "C:/temp")))
+BUNI_PORT = 58765
+
+
+def _events_file(session_id):
+    sid = (session_id or "").strip()
+    if sid:
+        safe = "".join(c for c in sid if c.isalnum() or c in "-_")
+        if safe:
+            return TEMP / f"claude-companion-events-{safe}.jsonl"
+    return TEMP / "claude-companion-events.jsonl"
+
+
+def _send_tcp(payload):
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        s.connect(("127.0.0.1", BUNI_PORT))
+        s.sendall((json.dumps(payload) + "\\n").encode("utf-8"))
+        s.close()
+    except Exception:
+        pass
+
+
+try:
+    raw = sys.stdin.buffer.read()
+    d = json.loads(raw.decode("utf-8", errors="replace"))
+    session_id = d.get("session_id", "")
+    is_remote  = bool(os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"))
+
+    if is_remote:
+        _send_tcp({"type": "tool_done", "session_id": session_id})
+    else:
+        events = _events_file(session_id)
+        with events.open("a", encoding="utf-8") as f:
+            f.write(\'{"type":"tool_done"}\\n\')
+except Exception:
+    pass
+'''
+
+_HOOK_NOTIFICATION = '''\
+#!/usr/bin/env python3
+import sys, json, os, time
+from pathlib import Path
+
+TEMP = Path(os.environ.get("TEMP", os.environ.get("TMP", "C:/temp")))
+BUNI_PORT = 58765
+
+
+def _events_file(session_id):
+    sid = (session_id or "").strip()
+    if sid:
+        safe = "".join(c for c in sid if c.isalnum() or c in "-_")
+        if safe:
+            return TEMP / f"claude-companion-events-{safe}.jsonl"
+    return TEMP / "claude-companion-events.jsonl"
+
+
+def _send_tcp(payload):
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        s.connect(("127.0.0.1", BUNI_PORT))
+        s.sendall((json.dumps(payload) + "\\n").encode("utf-8"))
+        s.close()
+    except Exception:
+        pass
+
+
+try:
+    raw = sys.stdin.buffer.read()
+    d = json.loads(raw.decode("utf-8", errors="replace"))
+    session_id = d.get("session_id", "")
+    msg        = d.get("message", "알림")[:120]
+    is_remote  = bool(os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"))
+    event      = {"type": "notification", "message": msg, "ts": time.time()}
+
+    if is_remote:
+        event["session_id"] = session_id
+        _send_tcp(event)
+    else:
+        events = _events_file(session_id)
+        with events.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event) + "\\n")
+except Exception:
+    pass
+'''
+
+_HOOK_STOP = '''\
+#!/usr/bin/env python3
+import sys, json, os
+from pathlib import Path
+
+TEMP = Path(os.environ.get("TEMP", os.environ.get("TMP", "C:/temp")))
+BUNI_PORT = 58765
+
+
+def _events_file(session_id):
+    sid = (session_id or "").strip()
+    if sid:
+        safe = "".join(c for c in sid if c.isalnum() or c in "-_")
+        if safe:
+            return TEMP / f"claude-companion-events-{safe}.jsonl"
+    return TEMP / "claude-companion-events.jsonl"
+
+
+def _send_tcp(payload):
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        s.connect(("127.0.0.1", BUNI_PORT))
+        s.sendall((json.dumps(payload) + "\\n").encode("utf-8"))
+        s.close()
+    except Exception:
+        pass
+
+
+try:
+    raw = sys.stdin.buffer.read()
+    d = json.loads(raw.decode("utf-8", errors="replace"))
+    session_id = d.get("session_id", "")
+    is_remote  = bool(os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"))
+
+    if is_remote:
+        _send_tcp({"type": "done", "session_id": session_id})
+    else:
+        events = _events_file(session_id)
+        with events.open("a", encoding="utf-8") as f:
+            f.write(\'{"type":"done"}\\n\')
+except Exception:
+    pass
+'''
+
+_HOOK_PROMPT = '''\
+#!/usr/bin/env python3
+import sys, json, os, time
+from pathlib import Path
+
+TEMP = Path(os.environ.get("TEMP", os.environ.get("TMP", "C:/temp")))
+BUNI_PORT = 58765
+
+
+def _events_file(session_id):
+    sid = (session_id or "").strip()
+    if sid:
+        safe = "".join(c for c in sid if c.isalnum() or c in "-_")
+        if safe:
+            return TEMP / f"claude-companion-events-{safe}.jsonl"
+    return TEMP / "claude-companion-events.jsonl"
+
+
+def _send_tcp(payload):
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        s.connect(("127.0.0.1", BUNI_PORT))
+        s.sendall((json.dumps(payload) + "\\n").encode("utf-8"))
+        s.close()
+    except Exception:
+        pass
+
+
+try:
+    raw = sys.stdin.buffer.read()
+    d = json.loads(raw.decode("utf-8", errors="replace"))
+    session_id = d.get("session_id", "")
+    is_remote  = bool(os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"))
+    event      = {"type": "thinking", "ts": time.time()}
+
+    if is_remote:
+        event["session_id"] = session_id
+        _send_tcp(event)
+    else:
+        events = _events_file(session_id)
+        with events.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event) + "\\n")
+except Exception:
+    pass
+'''
+
+
+def _run_hook(hook_type: str):
+    """Claude Code 훅으로 호출될 때 실행 (GUI 없이 경량 동작).
+    예: Buni-Windows.exe --hook pretool
+    Python 설치 불필요 — exe 자체가 훅을 처리한다.
+    """
+    try:
+        raw = sys.stdin.buffer.read()
+        d   = json.loads(raw.decode('utf-8', errors='replace'))
+    except Exception:
+        sys.exit(0)
+
+    session_id = d.get('session_id', '') or 'legacy'
+    safe_sid   = ''.join(c for c in session_id if c.isalnum() or c in '-_') or 'legacy'
+    ef         = _TEMP / f'claude-companion-events-{safe_sid}.jsonl'
+    is_remote  = bool(os.environ.get('SSH_CLIENT') or os.environ.get('SSH_TTY'))
+
+    def _write(ev):
+        try:
+            if not ef.exists():
+                ef.touch()
+            with ef.open('a', encoding='utf-8') as f:
+                f.write(json.dumps(ev, ensure_ascii=False) + '\n')
+        except Exception:
+            pass
+
+    def _tcp(ev):
+        try:
+            import socket as _s
+            s = _s.socket(_s.AF_INET, _s.SOCK_STREAM)
+            s.settimeout(1.0)
+            s.connect(('127.0.0.1', 58765))
+            payload = dict(ev); payload['session_id'] = session_id
+            s.sendall((json.dumps(payload) + '\n').encode('utf-8'))
+            s.close()
+        except Exception:
+            pass
+
+    emit = _tcp if is_remote else _write
+
+    if hook_type == 'prompt':
+        emit({'type': 'thinking', 'ts': time.time()})
+
+    elif hook_type == 'posttool':
+        emit({'type': 'tool_done'})
+
+    elif hook_type == 'stop':
+        emit({'type': 'done'})
+
+    elif hook_type == 'notification':
+        msg = d.get('message', '알림')[:120]
+        emit({'type': 'notification', 'message': msg, 'ts': time.time()})
+
+    elif hook_type == 'pretool':
+        tool  = d.get('tool_name', 'tool')
+        inp   = d.get('tool_input', {}) or {}
+        SAFE  = {'Read', 'Glob', 'Grep', 'LS', 'WebSearch', 'WebFetch',
+                 'TodoRead', 'NotebookRead', 'AskUserQuestion'}
+
+        if tool in SAFE or is_remote:
+            emit({'type': 'tool_use', 'tool': tool})
+        else:
+            if tool == 'Bash':
+                msg = inp.get('command', '')[:200]
+            elif tool == 'Write':
+                msg = f"[파일 쓰기] {inp.get('file_path', inp.get('path',''))}"[:200]
+            elif tool in ('Edit', 'MultiEdit'):
+                msg = f"[파일 수정] {inp.get('file_path', inp.get('path',''))}"[:200]
+            else:
+                fv  = next(iter(inp.values()), '') if inp else ''
+                msg = f'[{tool}] {fv}'[:200] if fv else tool
+
+            req_id = str(uuid.uuid4())[:8]
+            rf     = _TEMP / f'claude-companion-decision-{req_id}'
+            _write({'type': 'permission_request', 'id': req_id,
+                    'tool': tool, 'message': msg, 'ts': time.time()})
+
+            approved = True
+            for _ in range(120):
+                if rf.exists():
+                    try:
+                        dec = rf.read_text(encoding='utf-8').strip()
+                        rf.unlink(missing_ok=True)
+                        approved = (dec != 'deny')
+                    except Exception:
+                        pass
+                    break
+                time.sleep(0.5)
+
+            if not approved:
+                print(json.dumps({'decision': 'block', 'reason': '사용자가 거부했습니다.'}))
+                sys.exit(2)
+
+            _write({'type': 'tool_use', 'tool': tool})
+
+    sys.exit(0)
+
+
+def _tcp_event_server(manager: 'BuniManager'):
+    """SSH Remote 이벤트 수신용 TCP 서버 (127.0.0.1:58765)."""
+    import socket as _sock
+    try:
+        srv = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        srv.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
+        srv.bind(('127.0.0.1', 58765))
+        srv.listen(10)
+        srv.settimeout(1.0)
+    except Exception:
+        return
+
+    def _handle(conn):
+        buf = b''
+        try:
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+        except Exception:
+            pass
+        finally:
+            conn.close()
+        for raw in buf.decode('utf-8', errors='replace').splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+                sid = ev.get('session_id', '')
+                if not sid:
+                    continue
+                safe = ''.join(c for c in sid if c.isalnum() or c in '-_')
+                if not safe:
+                    continue
+                event_file = _TEMP / f'claude-companion-events-{safe}.jsonl'
+                with event_file.open('a', encoding='utf-8') as f:
+                    f.write(line + '\n')
+                manager.root.after(0, lambda s=safe, fp=event_file: (
+                    manager._add_session(s, fp) if s not in manager.sessions else None
+                ))
+            except Exception:
+                pass
+
+    while True:
+        try:
+            conn, _ = srv.accept()
+            threading.Thread(target=_handle, args=(conn,), daemon=True).start()
+        except _sock.timeout:
+            continue
+        except Exception:
+            break
+
+
+def _patch_vscode_settings():
+    """VS Code settings.json에 SSH RemoteForward 설정 자동 추가."""
+    vscode_dir = Path(os.environ.get('APPDATA', '')) / 'Code' / 'User'
+    if not vscode_dir.exists():
+        return
+    settings_path = vscode_dir / 'settings.json'
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding='utf-8'))
+        except Exception:
+            return  # JSONC 등 파싱 불가 시 스킵
+    else:
+        settings = {}
+    args = settings.get('remote.SSH.extraArgs', [])
+    if not isinstance(args, list):
+        args = []
+    for i in range(len(args) - 1):
+        if args[i] == '-R' and args[i + 1] == '58765:localhost:58765':
+            return  # 이미 설정됨
+    args.extend(['-R', '58765:localhost:58765'])
+    settings['remote.SSH.extraArgs'] = args
+    try:
+        settings_path.write_text(
+            json.dumps(settings, indent=2, ensure_ascii=False), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def _ensure_hooks_installed():
+    """Buni 실행 시 Claude Code 훅 자동 설치/갱신.
+    Python 설치 불필요 — Buni exe 자체를 훅 핸들러로 사용한다.
+    exe 경로가 바뀌면(이동/재설치) 자동으로 훅 명령 갱신.
+    """
+    settings_path = _CLAUDE_DIR / 'settings.json'
+    exe_path      = str(Path(sys.executable).resolve())
+
+    # 현재 exe 경로로 이미 설치돼 있으면 스킵
+    try:
+        if settings_path.exists():
+            d   = json.loads(settings_path.read_text(encoding='utf-8'))
+            pre = d.get('hooks', {}).get('PreToolUse', [])
+            for entry in pre:
+                for h in entry.get('hooks', []):
+                    cmd = h.get('command', '').replace('\\', '/')
+                    if '--hook pretool' in cmd and exe_path.replace('\\', '/') in cmd:
+                        _patch_vscode_settings()
+                        return
+    except Exception:
+        pass
+
+    try:
+        _CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
+
+        if settings_path.exists():
+            try:
+                settings = json.loads(settings_path.read_text(encoding='utf-8'))
+            except Exception:
+                settings = {}
+        else:
+            settings = {}
+
+        def _hook(htype):
+            # exe 자체를 --hook 모드로 호출 (Python 설치 불필요)
+            return {'type': 'command', 'command': f'"{exe_path}" --hook {htype}'}
+
+        additions = [
+            ('PreToolUse',       'pretool'),
+            ('PostToolUse',      'posttool'),
+            ('Notification',     'notification'),
+            ('Stop',             'stop'),
+            ('UserPromptSubmit', 'prompt'),
+        ]
+        existing = settings.get('hooks', {})
+        for event, htype in additions:
+            # 기존 Buni 훅 제거 (Python 스크립트·이전 exe 경로 모두)
+            prev = [e for e in existing.get(event, [])
+                    if not any('companion-' in str(h) or '--hook' in str(h)
+                               for h in e.get('hooks', []))]
+            existing[event] = prev + [{'matcher': '', 'hooks': [_hook(htype)]}]
+        settings['hooks'] = existing
+
+        settings_path.write_text(
+            json.dumps(settings, indent=2, ensure_ascii=False),
+            encoding='utf-8'
+        )
+    except Exception:
+        pass  # 훅 설치 실패해도 Buni는 동작
+
+    _patch_vscode_settings()
+
 
 # ── Windows API for click-through transparent window
 _u32              = ctypes.windll.user32
@@ -1624,8 +2178,9 @@ class SessionWindow:
                 st = self.event_file.stat()
                 # Windows: st_ctime는 생성 시각 — 90초 이내 파일은 처음부터 읽어
                 # 세션 시작 초반 이벤트(파일 탐색 등) 누락 방지
+                # 오래된 파일은 마지막 1KB만 읽어 직전 이벤트 복원
                 creation_age = time.time() - st.st_ctime
-                self._file_offset = 0 if creation_age < 90.0 else st.st_size
+                self._file_offset = 0 if creation_age < 90.0 else max(0, st.st_size - 1024)
         except Exception:
             pass
 
@@ -1688,7 +2243,8 @@ class SessionWindow:
             self._apply_state('thinking')
 
         elif t == 'thinking':
-            if self._is_replaying:
+            is_stale = (time.time() - ev.get('ts', 0) > 30) if 'ts' in ev else True
+            if self._is_replaying and is_stale:
                 return
             if self.state in ('ready', 'completed'):
                 self._apply_state('thinking')
@@ -1700,9 +2256,15 @@ class SessionWindow:
             # 자동 파일 삭제·세션 제거 없음 — 사용자가 숨기기 전까지 유지
 
         elif t == 'notification':
+            is_stale = (time.time() - ev.get('ts', 0) > 30) if 'ts' in ev else True
+            if self._is_replaying and is_stale:
+                return
             self._apply_state('notification', notif=ev.get('message', '알림'))
 
         elif t == 'permission_request':
+            is_stale = (time.time() - ev.get('ts', 0) > 30) if 'ts' in ev else True
+            if self._is_replaying and is_stale:
+                return
             pid = ev.get('id');  cmd = ev.get('message', '명령')
             if pid and self.always_approve:
                 try:
@@ -1810,6 +2372,9 @@ class BuniManager:
         except Exception:
             pass
 
+        _ensure_hooks_installed()
+        threading.Thread(target=_tcp_event_server, args=(self,), daemon=True).start()
+
         self.persist  = PersistenceManager()
         self.sessions: dict[str, SessionWindow] = {}
         self._slot_map: dict[int, str] = {}
@@ -1900,9 +2465,10 @@ class BuniManager:
             win.destroy()
 
     def cleanup_finished_sessions(self):
-        """새 세션 추가 전 이미 완료된(idle/ready/completed) 세션 제거."""
+        """새 세션 추가 전 종료된(idle/completed) 세션 제거.
+        ready는 병렬 실행 중인 세션일 수 있으므로 유지."""
         to_remove = [sid for sid, win in list(self.sessions.items())
-                     if win.state in ('idle', 'ready', 'completed')]
+                     if win.state in ('idle', 'completed')]
         for sid in to_remove:
             self.remove_session(sid)
 
@@ -2073,7 +2639,7 @@ class BuniManager:
 
     @staticmethod
     def _find_claude_dir() -> 'Path | None':
-        """%APPDATA%\Claude 또는 MSIX 패키지 경로 중 config.json이 있는 곳을 반환."""
+        r"""%APPDATA%\Claude 또는 MSIX 패키지 경로 중 config.json이 있는 곳을 반환."""
         candidates = [Path(os.environ.get('APPDATA', '')) / 'Claude']
         local_app = Path(os.environ.get('LOCALAPPDATA', ''))
         packages_dir = local_app / 'Packages'
@@ -2309,4 +2875,8 @@ class BuniManager:
 # ── Entry point ───────────────────────────────────────────────
 
 if __name__ == '__main__':
-    BuniManager()
+    # Claude Code 훅으로 호출될 때: --hook <type>
+    if len(sys.argv) >= 3 and sys.argv[1] == '--hook':
+        _run_hook(sys.argv[2])
+    else:
+        BuniManager()

@@ -1,4 +1,4 @@
-name: Build Windows Exe
+name: Build Windows Installer
 
 on:
   release:
@@ -24,6 +24,11 @@ jobs:
           pip install -r windows/requirements.txt
           pip install pyinstaller
 
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "VERSION=$(cat VERSION)" >> $GITHUB_OUTPUT
+
       - name: Build Buni-Windows.exe
         run: |
           pyinstaller `
@@ -36,9 +41,16 @@ jobs:
             --hidden-import PIL.ImageDraw `
             windows/buni.py
 
-      - name: Upload Buni-Windows.exe to Release
+      - name: Build installer with Inno Setup
+        shell: cmd
+        run: |
+          iscc /DAppVersion=${{ steps.version.outputs.VERSION }} /DExeSource=dist\Buni-Windows.exe windows\installer.iss
+
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Buni-Windows.exe
+          files: |
+            windows/Buni-Windows-Setup-${{ steps.version.outputs.VERSION }}.exe
+            dist/Buni-Windows.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

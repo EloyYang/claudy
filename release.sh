@@ -63,10 +63,15 @@ gh release create "v$VERSION" \
 
 ## 🪟 Windows 설치
 
-1. **Buni-Windows.exe** 다운로드 후 실행
-2. 실행하면 Claude Code 훅이 **자동으로 설치**됩니다.
+### 설치형 (권장)
+1. **Buni-Windows-Setup-$VERSION.exe** 다운로드 후 실행
+2. 설치 마법사를 따라 진행
+3. Claude Code 훅이 **자동으로 설치**됩니다.
 
-> *(Buni-Windows.exe는 GitHub Actions가 자동 빌드해 수 분 내 추가됩니다)*
+### 포터블 (설치 없이 바로 실행)
+1. **Buni-Windows.exe** 다운로드 후 실행
+
+> *(Windows 파일은 GitHub Actions가 자동 빌드해 수 분 내 추가됩니다)*
 
 ---
 

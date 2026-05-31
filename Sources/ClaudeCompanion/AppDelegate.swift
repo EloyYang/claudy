@@ -23,6 +23,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var claudeNotRunningStreak  = 0      // sysctl 경합 방지 디바운스 카운터
     private var isInitialScan           = true
 
+    // ── SSH Remote 이벤트 수신용 TCP 소켓 서버
+    private let socketServer = EventSocketServer()
+    /// TCP로 수신된 원격 세션 ID — Claude 프로세스 없이도 유지
+    private var remoteSessionIds: Set<String> = []
+
     // ── 사용자가 명시적으로 숨긴 상태 — true이면 새 세션도 자동 표시하지 않음
     private var isManuallyHidden = false
 
@@ -47,6 +52,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Launch
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        HookInstaller.ensureInstalled()
+        setupSocketServer()
         if !UserDefaults.standard.bool(forKey: "statusBar.hidden") {
             setupStatusBar()
         }
@@ -54,6 +61,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupSettingsCallbacks()
         setupUpdateChecker()
         startSessionScanner()
+    }
+
+    private func setupSocketServer() {
+        socketServer.onNewSession = { [weak self] sessionId, fileURL in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.remoteSessionIds.insert(sessionId)
+                guard self.sessions[sessionId] == nil,
+                      !self.ignoredSessionIds.contains(sessionId) else { return }
+                self.addSession(id: sessionId, fileURL: fileURL)
+            }
+        }
+        socketServer.start()
     }
 
     // MARK: - Session Scanner
@@ -181,9 +201,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return path.contains("/claude/") || path.contains(".claude")
     }
 
-    /// Claude 종료 시 대기·작업 중 세션만 제거, completed/permission 버블은 유지
+    /// Claude 종료 시 대기·작업 중 세션만 제거, completed/permission 버블 및 원격 세션은 유지
     private func cleanupInactiveSessions() {
         let toRemove = sessions.compactMap { (id, win) -> String? in
+            if remoteSessionIds.contains(id) { return nil }  // SSH Remote 세션은 유지
             switch win.controller.state {
             case .completed, .permission: return nil   // 사용자 응답 필요 — 유지
             default: return id
@@ -194,13 +215,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sessions.values.forEach { $0.hideCompanion() }
     }
 
-    /// 새 세션 추가 전 이미 완료된(idle/ready/completed) 세션 제거
-    /// — 새 Claude 세션 시작 시 이전 세션의 부니가 남지 않도록 처리
+    /// 새 세션 추가 전 종료된(idle/completed) 세션 제거
+    /// — ready는 병렬 실행 중인 세션일 수 있으므로 유지
     private func cleanupFinishedSessions() {
         let toRemove = sessions.compactMap { (id, win) -> String? in
             switch win.controller.state {
-            case .idle, .ready, .completed: return id
-            default: return nil   // thinking/tool/permission/notification 은 유지
+            case .idle, .completed: return id
+            default: return nil   // ready/thinking/tool/permission/notification 은 유지
             }
         }
         for id in toRemove { removeSession(id: id) }
@@ -270,6 +291,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// EventMonitor가 세션 종료를 확인 시 호출 — 재탐지 방지를 위해 ignoredSessionIds에 추가
     private func removeSession(id: String) {
         ignoredSessionIds.insert(id)   // 종료된 세션 파일 재탐지 방지
+        remoteSessionIds.remove(id)
         guard let win = sessions[id] else { return }
         win.teardown()
         slotOwner.removeValue(forKey: win.slot)
@@ -287,10 +309,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         win.onSessionEnded  = { [weak self] in
             DispatchQueue.main.async { self?.removeSession(id: win.sessionId) }
         }
+        win.onStaledSessionEnded = { [weak self] in
+            DispatchQueue.main.async { self?.removeStaledSession(id: win.sessionId) }
+        }
         win.onSaveOrigin = { [weak self] origin in
             guard win.slot == 0 else { return }
             self?.savedOrigin = origin
         }
+    }
+
+    /// 비활동 타임아웃으로 자동 종료된 세션 제거 — ignoredSessionIds에 추가하지 않아 재탐지 허용
+    private func removeStaledSession(id: String) {
+        remoteSessionIds.remove(id)
+        guard let win = sessions[id] else { return }
+        win.teardown()
+        slotOwner.removeValue(forKey: win.slot)
+        sessions.removeValue(forKey: id)
+        sessionOrder.removeAll { $0 == id }
+        rebuildMenu()
+        syncHotkeyPermissionState()
     }
 
     private func nextAvailableSlot() -> Int {
