@@ -44,7 +44,7 @@ jobs:
       - name: Build installer with Inno Setup
         shell: cmd
         run: |
-          iscc /DAppVersion=${{ steps.version.outputs.VERSION }} /DExeSource=dist\Buni-Windows.exe windows\installer.iss
+          iscc /DAppVersion=${{ steps.version.outputs.VERSION }} /DExeSource=${{ github.workspace }}\dist\Buni-Windows.exe windows\installer.iss
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
